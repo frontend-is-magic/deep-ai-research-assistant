@@ -159,3 +159,7 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 改为纯 ASGI PrivateCache，只包装 send 添加 no-store，不读取/改写 receive。新增 `test_real_http_disconnect_stops_worker_and_persists_audit` 在随机独占端口启动真实 Uvicorn，客户端真实关闭执行连接，验证 cancelled/client_disconnected、worker 已退出、已读版本/未知用量保存，并在新存储实例复验；没有 patch Request，也没有真实供应商 HTTP。
 
 实际负对照：临时仅恢复 c774274 的 HTTP 缓存中间件，运行 `TEST_DATABASE_URL=postgresql:///research_test ... pytest backend/test_durable.py -k real_http_disconnect -q`，SQLite/PostgreSQL 两组均因 running != cancelled 失败，2 expected failures；随后 finally 恢复工作区。修复后的完整后端/敏感测试为 `74 passed, 2 skipped, 1 warning in 4.04s`，真实 PostgreSQL16 与真实 socket；Ruff check/format通过。新提交对应 CI 将重新验证 PostgreSQL17 与全部 headless，推送后检查。
+
+修复提交：[5520d4027ea27939d58d6a9d7e7ead83a6840244](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/5520d4027ea27939d58d6a9d7e7ead83a6840244)，`fix: 保留真实客户端断开事件并持久化取消审计`；tree 与本地 7292a7cab199847647b0ace79031df99f2c02f1d 一致。[CI 37134705024](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37134705024) completed/success，quality job 111236759854。
+
+实际日志确认 `74 passed, 2 skipped, 1 warning in 5.83s`，新增真实 HTTP 断开回归在 SQLite/PostgreSQL17 两组都执行成功。冻结安装、Ruff、前端格式/类型/构建、13 响应契约、3 固定评测及 45 tracked/worktree/ZIP 敏感检查通过；两种存储 headless 各 6 流程/12 导出、API 重启与 queued 明确执行通过；0191fac 负对照依旧重现，30 隐私延迟回归通过，0 headless 页面错误与0真实模型调用。证据和 HUMAN_ACTIONS 已备妥，main 未修改；生产 Vercel 与原生 Browser 仍交主线验证。
