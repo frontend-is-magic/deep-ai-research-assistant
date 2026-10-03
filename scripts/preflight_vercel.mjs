@@ -95,7 +95,8 @@ try {
   const workspaceToken = randomUUID();
   const providerToken = randomUUID();
   const env = Object.fromEntries(['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'NODE_EXTRA_CA_CERTS', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY', 'UV_SYSTEM_CERTS', 'UV_NATIVE_TLS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
-  Object.assign(env, { PATH: join(project, 'frontend/node_modules/.bin') + ':' + process.env.PATH, UV_SYSTEM_CERTS: 'true', CI: '1', NO_COLOR: '1', VERCEL_TELEMETRY_DISABLED: '1', DO_NOT_TRACK: '1', DEEPSEEK_API_KEY: '', VERCEL: '1', PLAYGROUND_ACCESS_TOKEN: providerToken, WORKSPACE_IDENTITIES: JSON.stringify({ preflight: workspaceToken }), MAINTAINER_TOKEN: '', DATABASE_URL: '' });
+  // Keep pnpm outside the copy: Vercel may rebuild the copied node_modules during install.
+  Object.assign(env, { PATH: resolve(root, 'frontend/node_modules/.bin') + ':' + process.env.PATH, UV_SYSTEM_CERTS: 'true', CI: '1', NO_COLOR: '1', VERCEL_TELEMETRY_DISABLED: '1', DO_NOT_TRACK: '1', DEEPSEEK_API_KEY: '', VERCEL: '1', PLAYGROUND_ACCESS_TOKEN: providerToken, WORKSPACE_IDENTITIES: JSON.stringify({ preflight: workspaceToken }), MAINTAINER_TOKEN: '', DATABASE_URL: '' });
   child = spawn(process.execPath, [resolve(dirname(packagePath), pkg.bin.vercel), 'dev', '-L', '--listen', `127.0.0.1:${port}`, '--global-config', config, '--non-interactive'], { cwd: project, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const capture = data => { logs = (logs + data.toString().replace(/(https?:\/\/)[^/\s@]+@/g, '$1[redacted]@')).slice(-32000); };
   child.stdout.on('data', capture); child.stderr.on('data', capture);

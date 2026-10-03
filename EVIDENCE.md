@@ -195,3 +195,7 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 前置失败及修正也保留：目录软链接方案被 pnpm 的 UNSAFE_MODULES_DIR 拒绝，改为临时真实副本与固定 pnpm；隔离环境遗漏代理/TLS根导致公开依赖 DNS/UnknownIssuer，改为保留既有代理/证书设置并启用 UV_SYSTEM_CERTS，未禁用 TLS。失败轮次均清理4个自有端口，最终轮次清理6个。CI 增加同一脚本（5分钟步限）；对应提交/CI回执推送后补记。
 
 部署说明与 HUMAN_ACTIONS 明确 Framework Preset 为 Services；[supportsCancellation 当前仅 Node.js](https://vercel.com/docs/functions/functions-api-reference)，Python 云端断开传播另需平台验收。25秒只约束执行循环，初始化/同步数据库/收尾在外，不能视为整个HTTP硬上限。托管数据库、身份 secrets、生产授权/费用预算与实际发布仍未验证，统一交既有人工配置聊天。
+
+### 首次 CI 安装路径修正
+
+精确 [756f8885947cd46f5d6f77d019f6754a5d9781dd](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/756f8885947cd46f5d6f77d019f6754a5d9781dd) 的 [CI37138314317](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37138314317) 在新增预检失败；其前置后端/格式/冻结安装/13契约/评测已通过，后续 headless 被跳过。日志显示 Vercel 重新创建临时 node_modules，随后从该目录执行的 pnpm worker 退出；失败路径仍成功释放4个监听。改为 PATH 指向原工作区固定 pnpm10.32.1（副本外），Vercel 安装仅改临时项目，避免安装器自身随临时 node_modules 被重建。保留此失败回执，下一提交重新验证。
