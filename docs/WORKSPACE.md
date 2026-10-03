@@ -8,7 +8,7 @@
 
 MAINTAINER_TOKEN 单独保护 POST /api/library，并同时要求工作台身份。只允许公开来源的人工摘录，kind=public-manual、acquisition=manual-transcription；当前固定 HTTPS 主机白名单为 FastAPI、MCP、OpenAI 文档和 DeepSeek 文档。提供链接不意味着程序获取页面，也不意味着课程摘录是官方原文。既有合成材料继续标识 conflict-fixture。没有自动抓取、任意 URL 工具或代码执行。
 
-POST /api/runs 接收 prompt、mode，返回 202 与 run_id，仅保存 queued 及当前资料快照。POST /api/runs/{id}/execute 独立请求 claim 数据库租约，最多 25 秒请求内等待研究完成；React 创建后发执行请求，同时独立轮询。queued → running → completed / failed / cancelled；关闭页面/退出导致执行请求断开可能取消研究。重启保留 queued，页面详情可明确执行；有效 running 租约不受另一个冷启动影响，过期则 interrupted/lease_expired，绝不自动重放付费调用。取消不能证明供应商没有计费。数据库约束最多四个活跃租约、全局每分钟十次模型请求；共享限流是安全上限，不能替代供应商费用预算。
+POST /api/runs 接收 prompt、mode，返回 202 与 run_id，仅保存 queued 及当前资料快照。POST /api/runs/{id}/execute 独立请求 claim 数据库租约，执行循环使用 25 秒超时（初始化/同步数据库/收尾在外，整个 HTTP 请求无 25 秒硬上限）；React 创建后发执行请求，同时独立轮询。queued → running → completed / failed / cancelled；关闭页面/退出导致执行请求断开可能取消研究。重启保留 queued，页面详情可明确执行；有效 running 租约不受另一个冷启动影响，过期则 interrupted/lease_expired，绝不自动重放付费调用。取消不能证明供应商没有计费。数据库约束最多四个活跃租约、全局每分钟十次模型请求；共享限流是安全上限，不能替代供应商费用预算。
 
 GET /api/runs 最多列出最近 100 条；详情、取消、删除及导出都验证所有者，其他身份请求统一返回 404。活动任务需先取消再删除；已取消 worker 尚未回收时删除返回 409，待回收或租约过期可删。详情保存实际读取的版本化原文、引用、操作摘要、已知用量和失败原因，导出不包含令牌或 owner。JSON 是完整审计记录，Markdown 为阅读报告。引用校验只证明读取与原文子串存在，语义仍须人工核验。
 
@@ -33,3 +33,6 @@ SQLite 启动按缺失种子 ID 幂等补齐，修复首次录入过程中中断
 ## 取消与下一轮的原子边界
 
 取消确认后的数据库状态直接约束模型/工具准入，不能仅依赖周期轮询。进度检查点保存当前审计后若遇到 cancelled/interrupted 会立即停止，另有每次模型/工具开始前的租约检查。取消前已准入、已经在途的请求仍可能收费；其响应若已返回，保存已知用量及“模型用量”轨迹，但不执行响应里的工具、不发下一轮。未返回的请求保持 usage_complete=false；所有已发轮次完整用量已经返回时，取消记录也可 usage_complete=true，这只表示审计完整，不表示没有费用。租约过期的同令牌迟到响应只能补充审计，不改回 running、不自动重试；记录已删除或令牌不匹配则拒绝写入。
+
+
+Vercel 项目选择 Services 框架；本地 `dev -L` 预检与真实平台验收分别记证据。supportsCancellation 官方当前仅支持 Node.js，Python 云端客户端断开是否传播、进程终止后审计能否完成仍需单独验收；本地真实 socket/ASGI 结果不能替代。显式 /cancel 由数据库约束后续准入，硬中断则依靠租约与已写检查点恢复。

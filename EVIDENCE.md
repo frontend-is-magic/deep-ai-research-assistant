@@ -185,3 +185,13 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 主线精确 3e1da91 独立复验（用户回传，新的 clean public checkout / 冻结依赖，与上述云端 CI 区分）：原取消脚本 cancel ACK 后无新请求，model_calls=1 / tool_calls=0 / usage=11 / usage_complete=true，新读持久化一致；原始 ASGI http.disconnect 与 handler task cancel 保留前一轮usage11、pending第二轮、usage_complete=false和3步trace；五种跨owner操作均404/no-store。主线本地 test_durable 11passed/14skipped，因无本地PG，实际PG依据本次CI；0真实模型调用，未发现新问题。本轮取消审计至此收束。
 
 部署边界更新：主线报告 Vercel 连接器访问既有 bloodymoons-projects 返回403（scope授权不足），已归入既有一次性人工配置聊天，不绕过认证。此权限问题与代码/CI实现区分，HUMAN_ACTIONS更新；实际Vercel平台部署仍未验证，独立只读配置审查由主线进行。
+
+## 固定 Vercel CLI 本地同域预检（恢复交付）
+
+依据当前官方 [Services local development](https://vercel.com/docs/services#local-development) 使用 `vercel dev -L`，保留 services/root/rewrites，不使用旧 experimentalServices。固定 vercel 62.2.0、pnpm 10.32.1 并锁定依赖。`node scripts/preflight_vercel.mjs` 在临时源码/依赖副本、全新空 CLI config 下运行，不登录、关联或部署，不读取原认证缓存；仅保留工具链网络/TLS配置，清空数据库与模型密钥，身份令牌临时随机生成。
+
+已完成实际本地命令：`frontend/node_modules/.bin/pnpm --dir frontend check`（格式、TypeScript、Vite 构建通过）；`node scripts/preflight_vercel.mjs` 最终通过：首页与全部 script 静态资源同域200、FastAPI health200、demo complete且model_calls=0；私人入口401/no-store、真实模式缺访问码401、缺模型配置503、Vercel缺数据库503/no-store。实际输出 `Vercel local PASS: CLI62.2.0 dev -L`，随后 `Vercel local cleanup PASS: 6 owned listening ports released.`。清理仅针对自有进程及已记录监听，逐端口重新绑定验证；无真实模型调用、无远端部署、无 Browser 验收。
+
+前置失败及修正也保留：目录软链接方案被 pnpm 的 UNSAFE_MODULES_DIR 拒绝，改为临时真实副本与固定 pnpm；隔离环境遗漏代理/TLS根导致公开依赖 DNS/UnknownIssuer，改为保留既有代理/证书设置并启用 UV_SYSTEM_CERTS，未禁用 TLS。失败轮次均清理4个自有端口，最终轮次清理6个。CI 增加同一脚本（5分钟步限）；对应提交/CI回执推送后补记。
+
+部署说明与 HUMAN_ACTIONS 明确 Framework Preset 为 Services；[supportsCancellation 当前仅 Node.js](https://vercel.com/docs/functions/functions-api-reference)，Python 云端断开传播另需平台验收。25秒只约束执行循环，初始化/同步数据库/收尾在外，不能视为整个HTTP硬上限。托管数据库、身份 secrets、生产授权/费用预算与实际发布仍未验证，统一交既有人工配置聊天。

@@ -33,3 +33,6 @@ headless 使用随机临时身份和临时 SQLite，启动独立端口 8010/5174
 
 
 真实 PostgreSQL 验证由 CI 临时 postgres:17 服务执行。开发者也可在独立测试库设置 TEST_DATABASE_URL 后运行 pytest；测试创建随机 schema 并清理，勿指向生产。`RESEARCH_E2E_POSTGRES=1 node scripts/run_headless.mjs` 使用该测试 URL 走真实 React→API→PostgreSQL 和 API 重启链路；默认继续 SQLite。所有验收禁用真实模型。
+
+
+Vercel Services 本地同域预检（仅本地，不登录/连接/部署远端）：`node scripts/preflight_vercel.mjs`。固定 CLI62.2.0 与 pnpm10.32.1 已锁在开发依赖；使用临时源码/依赖副本、空的独立 CLI 配置目录、随机自有端口和空模型/数据库配置，验证首页/静态脚本、API health、demo 与缺托管配置拒绝，再释放全部自有进程/端口。需先冻结安装前后端依赖；CI 同样执行。本地验证不替代 Services 项目框架设置或 Python 云端断开验收。

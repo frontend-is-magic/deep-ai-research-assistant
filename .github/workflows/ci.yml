@@ -45,6 +45,8 @@ jobs:
       - run: node --test src/response.test.mjs
         working-directory: frontend
       - run: uv run --project backend python scripts/evaluate.py
+      - run: node scripts/preflight_vercel.mjs
+        timeout-minutes: 5
       - run: pnpm --dir frontend exec playwright install --with-deps chromium
       - run: node scripts/run_headless.mjs
       - run: node scripts/run_headless.mjs
