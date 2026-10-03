@@ -60,3 +60,13 @@ React/评测增量实际提交 fd0942a973d0aaf2541d9580b5cc33df306bbc2a。对应
 检查点补强精确提交 42525fe3e4d1bf6f37930b920a7a78313474a689；[CI run 37130498829](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37130498829) quality 全部成功，包括 52 后端/敏感测试、3 固定评测、13 前端响应契约及完整 headless。本地工作区与远端 develop 对应 commit 已同步，main 未改动。
 
 收尾新增保护：维护者不能将既有 conflict-fixture 替换为 public-manual（409 fixture_is_immutable），空白标题/正文拒绝（422），关键词统一 trim/lowercase，空 DB 路径采用开发默认。相应断言纳入现有版本/权限测试，本地 52 项重新通过。此修复的远端精确提交/CI 待下一证据条目填写；README/STARTER 已区分旧骨架与新增工作台，未把旧 demo 当作本轮成果。
+
+## 首轮代码验收点
+
+最后代码修复提交 **ded4c2e289a4af2b01887114529b1b9277ae3f32**（fix: 保护合成证据类别并补全验收说明）。[对应 CI run 37130690555](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37130690555) / job 111225022137 已全部成功，冻结依赖、Ruff、52 后端/敏感测试、React 格式/类型/构建、13 响应契约、3 固定证据评测以及完整 headless 均通过。前面条目中对此提交的“待验证”已经由此实际结果补齐。
+
+可运行交付为 develop 的 React + FastAPI 工作台，运行方法见 README.md / docs/WORKSPACE.md；持久卷环境与托管身份配置齐备后，可独立管理自己的研究记录。代码验收点包括版本化维护者资料录入、私人任务/列表/详情/删除/导出、SQLite 重启恢复、活动任务审计检查点和预算/引用边界。仍无真实模型费用或生产部署。
+
+最终工作区检查：git diff --check 无问题；python scripts/check_secrets.py 扫描 39 个暂存区 blob 与 39 个工作区文件（含 ZIP 成员规则）通过；本地对应远端 develop，保留初始化修复 533291b。main 未修改，父教程仓库未检出或修改。
+
+人工交接仅 HUMAN_ACTIONS.md：托管身份/维护者权限、持久化 API/部署、DeepSeek 费用与 secrets、主线原生 Browser 验收及 main/发布决定。不重复创建人工配置对话。Vercel 配置/503 占位可审查，但未执行 Vercel 构建/部署；生产数据库、共享预算、真实模型语义核验及原生 Browser 仍未验证。公开注册/SSO、通用语义冲突检测、网络抓取和隔离沙箱不在本轮实现中。
