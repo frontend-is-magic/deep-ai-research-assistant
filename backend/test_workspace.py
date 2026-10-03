@@ -203,3 +203,71 @@ def test_vercel_fails_closed_without_durable_store(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     with TestClient(create_app()) as client:
         assert client.get("/api/runs", headers=HEADERS).status_code == 503
+
+
+async def test_inflight_read_and_usage_checkpoint_survives_restart(setup, monkeypatch):
+    _, factory = setup
+    monkeypatch.setenv("PLAYGROUND_ACCESS_TOKEN", "provider-test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
+    waiting = asyncio.Event()
+    calls = 0
+
+    async def provider(request):
+        nonlocal calls
+        assert str(request.url) == "https://api.deepseek.com/chat/completions"
+        calls += 1
+        if calls == 3:
+            waiting.set()
+            await asyncio.Event().wait()
+        name = "document_search" if calls == 1 else "document_read"
+        arguments = '{"query":"API"}' if calls == 1 else '{"document_ids":["api"]}'
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": f"call-{calls}",
+                                    "type": "function",
+                                    "function": {"name": name, "arguments": arguments},
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            },
+        )
+
+    def client_factory(**kwargs):
+        return httpx.AsyncClient(transport=httpx.MockTransport(provider), **kwargs)
+
+    api = create_app(client_factory=client_factory, storage_factory=factory)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api), base_url="http://test"
+    ) as client:
+        identity = (
+            await client.post(
+                "/api/runs",
+                headers={**HEADERS, "X-Playground-Token": "provider-test"},
+                json={"prompt": "API", "mode": "deepseek"},
+            )
+        ).json()["run_id"]
+        await asyncio.wait_for(waiting.wait(), timeout=2)
+        run = (await client.get(f"/api/runs/{identity}", headers=HEADERS)).json()
+        assert run["status"] == "running"
+        assert run["model_calls"] == 3
+        assert run["tool_calls"] == 2
+        assert run["read_documents"][0]["version"] == 1
+        assert run["usage"] == {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22}
+        assert run["usage_complete"] is False
+        # Open storage as after a crash; pending model call is never replayed.
+        recovered = factory().get_run("alice", identity)
+        assert recovered["status"] == "interrupted"
+        assert recovered["read_documents"] == run["read_documents"]
+        assert recovered["usage"] == run["usage"]
+        assert recovered["usage_complete"] is False
+        await client.post(f"/api/runs/{identity}/cancel", headers=HEADERS)

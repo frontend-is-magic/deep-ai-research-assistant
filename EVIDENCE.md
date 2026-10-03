@@ -46,3 +46,13 @@ React 审查：独立工作台组件，凭据仅内存，读请求超时/禁止�
 [草稿 PR #1](https://github.com/frontend-is-magic/deep-ai-research-assistant/pull/1)。CLI HTTPS push 无可用用户名；改用已连接 GitHub 的 tree/commit/ref API 普通更新 develop，再 fetch/rebase 等价本地提交；未查看或输出认证缓存，没有强推。
 
 未验证：原生 Codex Browser、云端 headless（待 GitHub CI）、真实 DeepSeek/真实断连计费、生产部署、Vercel 构建和反向代理、托管数据库/持久任务队列/共享费用预算、SSO 和公开注册。Vercel 配置目前只交付前端且 API 占位安全返回 503，不能作为独立在线研究产品发布。所有人工事项汇总 HUMAN_ACTIONS.md，其他开发照常。
+
+## React 工作台 CI 与运行中审计补强
+
+React/评测增量实际提交 fd0942a973d0aaf2541d9580b5cc33df306bbc2a。对应 [CI run 37130204009](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37130204009) 已全部成功，含 headless，不再列为“CI 待验证”。实际 job 111223639238 日志确认：
+
+> Headless PASS: 6 desktop/mobile research flows, 12 downloads, keyboard submit, denied identity, reload and API restart recovery, logout privacy; 0 page errors; 0 model calls.
+
+这是 GitHub Ubuntu headless 上实际 React/Vite → HTTP FastAPI → SQLite 的结果；云端本地因浏览器下载受限未跑通，原生 Codex Browser 验收仍交回主线。没有将 CI headless 等同于原生 Browser 或真实模型验收。
+
+后续补强使资料操作、用量返回及每轮模型调用前写审计检查点；增加真实 engine + MockTransport 的挂起第三轮测试：已知 2 轮用量与已读 v1 原文在 running 状态已进入 SQLite，恢复为 interrupted 后仍保留，未知第三轮不计作零。最终补强 commit/CI 由 Git 历史和后续证据条目定位。

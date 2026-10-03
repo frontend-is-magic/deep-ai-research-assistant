@@ -98,9 +98,21 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             raise HTTPException(404, "run_not_found")
         return run
 
+    def checkpoint(owner, run, research):
+        run.update(
+            updated_at=now(),
+            read_documents=[research.by_id[key] for key in sorted(research.read_ids)],
+            trace=research.trace,
+            model_calls=research.model_calls,
+            tool_calls=research.tool_calls,
+            usage=research.usage or None,
+            usage_complete=research.usage_complete and not research.pending_model_call,
+        )
+        storage().save_run(owner, run)
+
     async def execute(owner, run, research):
         run.update(status="running", updated_at=now())
-        storage().save_run(owner, run)
+        checkpoint(owner, run, research)
         try:
             result = (
                 demo(run["prompt"], research=research)
@@ -118,16 +130,7 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
         finally:
             if run["status"] != "completed" and research.model_calls:
                 research.usage_complete = False
-            run.update(
-                updated_at=now(),
-                read_documents=[research.by_id[key] for key in sorted(research.read_ids)],
-                trace=research.trace,
-                model_calls=research.model_calls,
-                tool_calls=research.tool_calls,
-                usage=research.usage or None,
-                usage_complete=research.usage_complete,
-            )
-            storage().save_run(owner, run)
+            checkpoint(owner, run, research)
             tasks.pop(run["run_id"], None)
 
     from fastapi import Depends
@@ -205,6 +208,7 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             "usage_complete": True,
         }
         storage().save_run(owner, run)
+        research.on_progress = lambda: checkpoint(owner, run, research)
         tasks[run["run_id"]] = asyncio.create_task(execute(owner, run, research))
         return run
 

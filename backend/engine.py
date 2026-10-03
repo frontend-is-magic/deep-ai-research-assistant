@@ -87,6 +87,8 @@ class Research:
         self.usage = {}
         self.usage_complete = True
         self.trace = []
+        self.on_progress = None
+        self.pending_model_call = False
         self.step("计划", "限定为本地资料检索、批量读取、整理与引用校验。")
 
     def step(self, title, detail, status="success"):
@@ -98,6 +100,12 @@ class Research:
                 "status": status,
             }
         )
+
+        self.checkpoint()
+
+    def checkpoint(self):
+        if self.on_progress:
+            self.on_progress()
 
     def tool(self, name, arguments):
         if self.tool_calls >= 2:
@@ -195,6 +203,8 @@ class Research:
             self.usage_complete = False
         for key, count in known.items():
             self.usage[key] = self.usage.get(key, 0) + count
+        self.pending_model_call = False
+        self.checkpoint()
 
 
 def demo(prompt, documents=None, research=None):
@@ -232,6 +242,8 @@ async def generate(prompt, charge, client_factory=httpx.AsyncClient, research=No
             for index in range(3):
                 charge()
                 run.model_calls += 1
+                run.pending_model_call = True
+                run.checkpoint()
                 body = {
                     "model": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                     "max_tokens": 800,
