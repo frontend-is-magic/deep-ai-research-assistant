@@ -8,6 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.32.1
@@ -32,3 +34,5 @@ jobs:
       - run: uv run --project backend python scripts/evaluate.py
       - run: pnpm --dir frontend exec playwright install --with-deps chromium
       - run: node scripts/run_headless.mjs
+      - run: node scripts/run_privacy_headless.mjs --baseline
+      - run: node scripts/run_privacy_headless.mjs

@@ -20,6 +20,8 @@ type Run = {
   }[];
 };
 
+type Session = { generation: number; token: string; controller: AbortController };
+
 export function Workspace({ onReport }: { onReport: (answer: Answer | null) => void }) {
   const [token, setToken] = useState('');
   const [connected, setConnected] = useState(false);
@@ -31,68 +33,165 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
   const [library, setLibrary] = useState<Run['read_documents']>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const generation = useRef(0);
+  const mounted = useRef(true);
+  const busyRef = useRef(false);
+  const session = useRef<Session>({ generation: 0, token: '', controller: new AbortController() });
   const running = active?.status === 'queued' || active?.status === 'running';
-  async function api(path: string, init: RequestInit = {}) {
+
+  function current(snapshot: Session) {
+    return (
+      mounted.current &&
+      session.current.generation === snapshot.generation &&
+      session.current === snapshot &&
+      !snapshot.controller.signal.aborted
+    );
+  }
+  function ensureCurrent(snapshot: Session) {
+    if (!current(snapshot)) throw new DOMException('Session ended', 'AbortError');
+  }
+  function publish(snapshot: Session, update: () => void) {
+    if (current(snapshot)) update();
+  }
+  function replaceSession(nextToken: string) {
+    session.current.controller.abort();
+    session.current = {
+      generation: session.current.generation + 1,
+      token: nextToken,
+      controller: new AbortController(),
+    };
+    busyRef.current = false;
+    setBusy(false);
+    setToken(nextToken);
+    setConnected(false);
+    setProviderToken('');
+    setPrompt('API 超时');
+    setMode('demo');
+    setRuns([]);
+    setActive(null);
+    setLibrary([]);
+    setError('');
+    onReport(null);
+    return session.current;
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      session.current.controller.abort();
+      session.current = {
+        generation: session.current.generation + 1,
+        token: '',
+        controller: new AbortController(),
+      };
+      busyRef.current = false;
+    };
+  }, []);
+
+  async function api(snapshot: Session, path: string, init: RequestInit = {}) {
+    ensureCurrent(snapshot);
     const response = await fetch(path, {
       cache: 'no-store',
-      signal: AbortSignal.timeout(10000),
       ...init,
+      signal: AbortSignal.any([
+        snapshot.controller.signal,
+        AbortSignal.timeout(10000),
+        ...(init.signal ? [init.signal] : []),
+      ]),
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${snapshot.token}`,
         ...init.headers,
       },
     });
-    if (!response.ok) throw new Error(responseError(await response.json()));
+    ensureCurrent(snapshot);
+    if (!response.ok) {
+      const payload = await response.json();
+      ensureCurrent(snapshot);
+      throw new Error(responseError(payload));
+    }
     return response;
   }
-  async function refresh() {
-    const value = await (await api('/api/runs')).json();
-    setRuns(value.runs);
+  async function json<T>(snapshot: Session, path: string, init: RequestInit = {}): Promise<T> {
+    const payload = await (await api(snapshot, path, init)).json();
+    ensureCurrent(snapshot);
+    return payload;
   }
-  async function action(work: () => Promise<void>) {
-    if (busy) return;
-    setBusy(true);
-    setError('');
+  async function refresh(snapshot: Session, signal?: AbortSignal) {
+    const value = await json<{ runs: Run[] }>(snapshot, '/api/runs', { signal });
+    if (signal?.aborted) return;
+    publish(snapshot, () => setRuns(value.runs));
+  }
+  async function action(work: (snapshot: Session) => Promise<void>, snapshot = session.current) {
+    if (!current(snapshot) || busyRef.current) return;
+    busyRef.current = true;
+    publish(snapshot, () => {
+      setBusy(true);
+      setError('');
+    });
     try {
-      await work();
+      await work(snapshot);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '请求失败');
+      publish(snapshot, () => setError(e instanceof Error ? e.message : '请求失败'));
     } finally {
-      setBusy(false);
+      publish(snapshot, () => {
+        busyRef.current = false;
+        setBusy(false);
+      });
     }
   }
-  async function select(id: string) {
-    const run: Run = await (await api(`/api/runs/${id}`)).json();
-    setActive(run);
-    onReport(run.result ? parseAnswer(run.result) : null);
+  async function connect() {
+    const snapshot = replaceSession(token);
+    await action(async (snapshot) => {
+      const [reports, data] = await Promise.all([
+        json<{ runs: Run[] }>(snapshot, '/api/runs'),
+        json<{ documents: Run['read_documents'] }>(snapshot, '/api/library'),
+      ]);
+      publish(snapshot, () => {
+        setRuns(reports.runs);
+        setLibrary(data.documents);
+        setConnected(true);
+      });
+    }, snapshot);
+  }
+  async function select(snapshot: Session, id: string) {
+    const run = await json<Run>(snapshot, `/api/runs/${id}`);
+    publish(snapshot, () => {
+      const report = run.result ? parseAnswer(run.result) : null;
+      setActive(run);
+      onReport(report);
+    });
   }
   useEffect(() => {
     if (!running || !active) return;
-    const current = generation.current;
-    let stopped = false;
+    const snapshot = session.current;
+    const pollingController = new AbortController();
     let polling = false;
     const timer = setInterval(() => {
-      if (polling || stopped) return;
+      if (polling || pollingController.signal.aborted || !current(snapshot)) return;
       polling = true;
       void (async () => {
         try {
-          const run: Run = await (await api(`/api/runs/${active.run_id}`)).json();
-          if (stopped || current !== generation.current) return;
-          setActive(run);
-          if (run.result) onReport(parseAnswer(run.result));
-          if (run.status !== 'queued' && run.status !== 'running') await refresh();
+          const run = await json<Run>(snapshot, `/api/runs/${active.run_id}`, {
+            signal: pollingController.signal,
+          });
+          if (run.status !== 'queued' && run.status !== 'running')
+            await refresh(snapshot, pollingController.signal);
+          if (pollingController.signal.aborted) return;
+          publish(snapshot, () => {
+            const report = run.result ? parseAnswer(run.result) : null;
+            setActive(run);
+            onReport(report);
+          });
         } catch (e) {
-          if (!stopped && current === generation.current)
-            setError(e instanceof Error ? e.message : '状态读取失败');
+          if (!pollingController.signal.aborted)
+            publish(snapshot, () => setError(e instanceof Error ? e.message : '状态读取失败'));
         } finally {
           polling = false;
         }
       })();
     }, 500);
     return () => {
-      stopped = true;
+      pollingController.abort();
       clearInterval(timer);
     };
   }, [active?.run_id, running, token, onReport]);
@@ -110,40 +209,16 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
           autoComplete="off"
           value={token}
           disabled={connected}
-          onChange={(e) => setToken(e.target.value)}
+          onChange={(e) => replaceSession(e.target.value)}
           className="mt-2 block w-full rounded border p-2"
         />
       </label>
       {!connected ? (
-        <Button
-          disabled={busy || !token}
-          onClick={() =>
-            void action(async () => {
-              await refresh();
-              const data = await (await api('/api/library')).json();
-              setLibrary(data.documents);
-              setConnected(true);
-            })
-          }
-        >
+        <Button disabled={busy || !token} onClick={() => void connect()}>
           连接工作台
         </Button>
       ) : (
-        <Button
-          disabled={busy}
-          onClick={() => {
-            generation.current++;
-            setConnected(false);
-            setToken('');
-            setProviderToken('');
-            setRuns([]);
-            setActive(null);
-            setLibrary([]);
-            onReport(null);
-          }}
-        >
-          退出工作台
-        </Button>
+        <Button onClick={() => replaceSession('')}>退出工作台</Button>
       )}
       {connected && (
         <>
@@ -217,35 +292,34 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
                 busy || running || !prompt.trim() || (mode === 'deepseek' && !providerToken)
               }
               onClick={() =>
-                void action(async () => {
-                  const run = await (
-                    await api('/api/runs', {
-                      method: 'POST',
-                      headers: { 'X-Playground-Token': providerToken },
-                      body: JSON.stringify({ prompt, mode }),
-                    })
-                  ).json();
-                  setActive(run);
-                  onReport(null);
-                  await refresh();
+                void action(async (snapshot) => {
+                  const run = await json<Run>(snapshot, '/api/runs', {
+                    method: 'POST',
+                    headers: { 'X-Playground-Token': providerToken },
+                    body: JSON.stringify({ prompt, mode }),
+                  });
+                  publish(snapshot, () => {
+                    setActive(run);
+                    onReport(null);
+                  });
+                  await refresh(snapshot);
                 })
               }
             >
               开始研究
             </Button>
-            <Button disabled={busy} onClick={() => void action(refresh)}>
+            <Button disabled={busy} onClick={() => void action((snapshot) => refresh(snapshot))}>
               刷新报告
             </Button>
             {running && (
               <Button
                 onClick={() =>
-                  void action(async () => {
-                    setActive(
-                      await (
-                        await api(`/api/runs/${active!.run_id}/cancel`, { method: 'POST' })
-                      ).json(),
-                    );
-                    await refresh();
+                  void action(async (snapshot) => {
+                    const run = await json<Run>(snapshot, `/api/runs/${active!.run_id}/cancel`, {
+                      method: 'POST',
+                    });
+                    publish(snapshot, () => setActive(run));
+                    await refresh(snapshot);
                   })
                 }
               >
@@ -272,10 +346,11 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
                     key={format}
                     disabled={busy || running}
                     onClick={() =>
-                      void action(async () => {
+                      void action(async (snapshot) => {
                         const blob = await (
-                          await api(`/api/runs/${active.run_id}/export?format=${format}`)
+                          await api(snapshot, `/api/runs/${active.run_id}/export?format=${format}`)
                         ).blob();
+                        ensureCurrent(snapshot);
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
@@ -298,20 +373,21 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
                 <button
                   className="w-full break-words text-left underline"
                   disabled={busy}
-                  onClick={() => void action(() => select(run.run_id))}
+                  onClick={() => void action((snapshot) => select(snapshot, run.run_id))}
                 >
                   {run.prompt} · {run.status}
                 </button>
                 <Button
                   disabled={busy || ['queued', 'running'].includes(run.status)}
                   onClick={() =>
-                    void action(async () => {
-                      await api(`/api/runs/${run.run_id}`, { method: 'DELETE' });
+                    void action(async (snapshot) => {
+                      await api(snapshot, `/api/runs/${run.run_id}`, { method: 'DELETE' });
+                      ensureCurrent(snapshot);
                       if (active?.run_id === run.run_id) {
                         setActive(null);
                         onReport(null);
                       }
-                      await refresh();
+                      await refresh(snapshot);
                     })
                   }
                 >

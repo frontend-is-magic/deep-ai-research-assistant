@@ -70,3 +70,17 @@ React/评测增量实际提交 fd0942a973d0aaf2541d9580b5cc33df306bbc2a。对应
 最终工作区检查：git diff --check 无问题；python scripts/check_secrets.py 扫描 39 个暂存区 blob 与 39 个工作区文件（含 ZIP 成员规则）通过；本地对应远端 develop，保留初始化修复 533291b。main 未修改，父教程仓库未检出或修改。
 
 人工交接仅 HUMAN_ACTIONS.md：托管身份/维护者权限、持久化 API/部署、DeepSeek 费用与 secrets、主线原生 Browser 验收及 main/发布决定。不重复创建人工配置对话。Vercel 配置/503 占位可审查，但未执行 Vercel 构建/部署；生产数据库、共享预算、真实模型语义核验及原生 Browser 仍未验证。公开注册/SSO、通用语义冲突检测、网络抓取和隔离沙箱不在本轮实现中。
+
+## 2026-10-03 · 主线独立审查修复 P1/P2
+
+审查基准 0191fac818cbc26e549f1879a1f74ccac40a6f92。主线确认 P1：Alice running 报告轮询终态后，旧 GET /api/runs 延迟返回能污染 Bob 会话列表；P2：逐条提交种子且以“库非空”跳过整批初始化，首次中断后永久缺资料。这两项之前未被已通过的测试覆盖，已通过的旧 CI 不能证明不存在竞态。
+
+P1 修复：所有工作台操作携带不可变 session generation/令牌/AbortController；身份输入变化、连接新会话、退出与卸载均使旧会话失效并取消全部旧请求。response/body await 之后再次核验代次，每次列表、详情、库、报告、错误及 busy 回写均被同一快照保护。轮询自己的取消控制器阻止旧详情回填；终态列表刷新完整等待并受保护。退出始终可用，不被 busy 锁住；旧导出不得触发下载，旧 finally 不得解除 Bob 的 busy。
+
+新增 scripts/run_privacy_headless.mjs 使用真实 React/Vite + 纯 mock API，故意让 mock 忽略取消，覆盖 10 个异步入口 × 退出/Bob 已连接/Bob 仍连接中，共 30 个延迟完成场景。另 --baseline 在独立临时源码副本加载 0191fac 的 workspace.tsx，要求真实复现主线报告的 poll-list/bob 可见泄漏；不改工作树。CI checkout 全历史以读取精确审查基准。此前的实际 HTTP API headless 保留，不被纯 mock 测试替代。
+
+已实际运行：pnpm 10.32.1 --dir frontend check（格式/TypeScript/Vite）通过，node --test frontend/src/response.test.mjs 13 通过，node --check scripts/run_privacy_headless.mjs 通过。云端 playwright install --only-shell chromium 仍收到无效 ZIP，node scripts/run_privacy_headless.mjs 因缺浏览器退出且清理自建进程；没有声称本地 headless 成功。P1 的 baseline/30 场景实际 CI 结果及修复 commit 待后续精确证据补齐。
+
+P2 已先实跑独立对照：把 git show 0191fac:backend/storage.py 加载到内存模块，再对新 backend/test_storage.py 执行 pytest；三个断言均按预期失败（第 1/3 条提交后中断仍仅 1/3 篇，已有维护者修订时仍缺四篇）。工作树未替换旧源码。修复为按缺失种子 ID 幂等补齐，不覆盖已有 ID 或增加其版本。修复后 uv run --project backend python -m pytest backend tests 共 55 通过（原 52 + 新 3），Ruff 格式/检查通过；重启后原有维护者 v2 内容、版本、哈希与时间保持不变。
+
+本轮不改变 main、不调用真实模型、不购买额度、不要求新的人工配置。每个提交前继续扫描暂存区/工作区/ZIP；精确提交及新增 CI 成功/失败将在后续条目如实记录。
