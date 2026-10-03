@@ -109,6 +109,12 @@ async def test_library_permissions_and_snapshot(setup):
             assert (
                 await client.post("/api/library", headers=headers, json={**doc, "url": url})
             ).status_code == 422
+        assert (
+            await client.post("/api/library", headers=headers, json={**doc, "id": "billing-a"})
+        ).status_code == 409
+        assert (
+            await client.post("/api/library", headers=headers, json={**doc, "body": "   "})
+        ).status_code == 422
         updated = (await client.post("/api/library", headers=headers, json=doc)).json()
         assert updated["version"] == 2
         saved = (await client.get(f"/api/runs/{identity}", headers=HEADERS)).json()

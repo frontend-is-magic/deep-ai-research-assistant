@@ -56,3 +56,7 @@ React/评测增量实际提交 fd0942a973d0aaf2541d9580b5cc33df306bbc2a。对应
 这是 GitHub Ubuntu headless 上实际 React/Vite → HTTP FastAPI → SQLite 的结果；云端本地因浏览器下载受限未跑通，原生 Codex Browser 验收仍交回主线。没有将 CI headless 等同于原生 Browser 或真实模型验收。
 
 后续补强使资料操作、用量返回及每轮模型调用前写审计检查点；增加真实 engine + MockTransport 的挂起第三轮测试：已知 2 轮用量与已读 v1 原文在 running 状态已进入 SQLite，恢复为 interrupted 后仍保留，未知第三轮不计作零。最终补强 commit/CI 由 Git 历史和后续证据条目定位。
+
+检查点补强精确提交 42525fe3e4d1bf6f37930b920a7a78313474a689；[CI run 37130498829](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37130498829) quality 全部成功，包括 52 后端/敏感测试、3 固定评测、13 前端响应契约及完整 headless。本地工作区与远端 develop 对应 commit 已同步，main 未改动。
+
+收尾新增保护：维护者不能将既有 conflict-fixture 替换为 public-manual（409 fixture_is_immutable），空白标题/正文拒绝（422），关键词统一 trim/lowercase，空 DB 路径采用开发默认。相应断言纳入现有版本/权限测试，本地 52 项重新通过。此修复的远端精确提交/CI 待下一证据条目填写；README/STARTER 已区分旧骨架与新增工作台，未把旧 demo 当作本轮成果。

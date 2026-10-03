@@ -1,5 +1,7 @@
 # Agent 研究助手毕业项目
 
+本文描述保留的公开骨架演示；新增私人工作台、资料版本、持久化与身份配置见 [WORKSPACE.md](WORKSPACE.md)。
+
 React + TypeScript 前端连接 Python / FastAPI 后端。默认用固定本地资料演示「计划 → 检索 → 批量读取 → 整理 → 引用校验」；真实模式使用服务端 DeepSeek API，沿用 OpenAI 兼容的 messages / tool_calls 输入输出格式。真实模型决策由供应商返回，演示顺序则是预设的。
 
 ## 本地运行

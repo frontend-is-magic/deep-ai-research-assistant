@@ -63,7 +63,7 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
                 storage_factory
                 or (
                     lambda: SQLiteStore(
-                        os.getenv("RESEARCH_DB_PATH", "data/research.sqlite3"), DOCUMENTS
+                        os.getenv("RESEARCH_DB_PATH") or "data/research.sqlite3", DOCUMENTS
                     )
                 )
             )()
@@ -168,9 +168,18 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             or port not in {None, 443}
         ):
             raise HTTPException(422, "source_not_allowed")
+        if any(
+            doc["id"] == body.id and doc["kind"] == "conflict-fixture"
+            for doc in storage().documents()
+        ):
+            raise HTTPException(409, "fixture_is_immutable")
+        if not body.title.strip() or not body.body.strip():
+            raise HTTPException(422, "invalid_document")
         if any(not word.strip() or len(word) > 80 for word in body.keywords):
             raise HTTPException(422, "invalid_keywords")
-        return storage().put_document(body.model_dump())
+        document = body.model_dump()
+        document["keywords"] = [word.strip().lower() for word in body.keywords]
+        return storage().put_document(document)
 
     @api.post("/api/runs", status_code=202)
     async def start(

@@ -1,6 +1,6 @@
 # Deep AI Research Assistant
 
-有证据、有边界的技术研究助手，来自 Deep AI Station 的 Agent 毕业项目。当前仓库是已验证骨架，云端任务将在 develop 持续实现资料版本、研究任务、持久化和评测，不把演示骨架当作成品。
+有证据、有边界的技术研究助手，来自 Deep AI Station 的 Agent 毕业项目。develop 已在学习骨架上新增版本化资料、私人研究任务、报告与持久化评测，可在单 worker/持久卷环境运行；在线生产部署与真实模型尚未验收。
 
 - 原教程：[三个 Agent 毕业课](https://deep-ai-station.vercel.app/lesson/agent-research-agent)
 - 来源：[deep-ai-station @ 428fadd](https://github.com/frontend-is-magic/deep-ai-station/tree/428fadd5a713710c3931d61fc6befd1cf571dbef/starters/agent)
