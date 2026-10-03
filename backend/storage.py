@@ -36,9 +36,13 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS runs(
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, payload TEXT NOT NULL);
         """)
-        if not self.documents():
-            for doc in seeds:
+        # A partially committed first boot must be repairable on the next boot.
+        # Existing IDs (including maintainer revisions) are never reseeded.
+        existing_ids = {row[0] for row in self.db.execute("SELECT DISTINCT id FROM documents")}
+        for doc in seeds:
+            if doc["id"] not in existing_ids:
                 self.put_document(doc)
+                existing_ids.add(doc["id"])
         # A single worker owns this store. Restart never silently resumes paid calls.
         for identity, owner, payload in self.db.execute(
             "SELECT id, owner, payload FROM runs"
