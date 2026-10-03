@@ -84,3 +84,36 @@ P1 修复：所有工作台操作携带不可变 session generation/令牌/Abort
 P2 已先实跑独立对照：把 git show 0191fac:backend/storage.py 加载到内存模块，再对新 backend/test_storage.py 执行 pytest；三个断言均按预期失败（第 1/3 条提交后中断仍仅 1/3 篇，已有维护者修订时仍缺四篇）。工作树未替换旧源码。修复为按缺失种子 ID 幂等补齐，不覆盖已有 ID 或增加其版本。修复后 uv run --project backend python -m pytest backend tests 共 55 通过（原 52 + 新 3），Ruff 格式/检查通过；重启后原有维护者 v2 内容、版本、哈希与时间保持不变。
 
 本轮不改变 main、不调用真实模型、不购买额度、不要求新的人工配置。每个提交前继续扫描暂存区/工作区/ZIP；精确提交及新增 CI 成功/失败将在后续条目如实记录。
+
+## 主线审查 P1/P2 最终复核结果
+
+| 修复 | 实际远端 commit | GitHub CI |
+| --- | --- | --- |
+| P1 旧会话响应/状态隔离 | 57d47775b281eb71972c9fa40228d954a2768e4c | [37132354790](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37132354790)，quality 全部成功 |
+| P2 不完整种子初始化恢复 | bb7913bebdf0156e39fa563f3239d1853ea8a7e2 | [37132384660](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37132384660)，quality 全部成功 |
+
+后一个 CI 的 job 111229902403 实际日志已读取，结果为：
+
+- `55 passed, 1 warning`：含第 1/3 条种子提交后抛异常、重启补齐五篇、维护者 v2 不覆盖的三个新增测试。Starlette 弃用警告沿用基线。
+- `Headless PASS: 6 desktop/mobile research flows, 12 downloads, keyboard submit, denied identity, reload and API restart recovery, logout privacy; 0 page errors; 0 model calls.`：原真实 HTTP React→API→SQLite 验收保留并通过。
+- `Baseline 0191fac privacy regression reproduced: 1 failed assertions; Alice poll list appears in Bob session.`：独立临时源码副本中真实复现主线报告，不是把旧版测试成功当作修复成功；该负对照步骤以确认泄漏为预期结果。
+- `Privacy headless PASS: 30 delayed completion scenarios; old lists/details/library/errors/busy/start/cancel/delete/export suppressed after logout or identity change; abort signals verified; mock ignores cancellation; 0 model calls.`：实际 React 与 mock API、10 入口 × 3 会话状态通过。分别测试 logout、Bob 已连接且列表空、Bob 连接仍挂起；旧详情/列表/资料库/错误不能回填，旧 finally 不能清除 Bob busy，旧导出不能下载。取消被故意忽略，成功依赖 generation 回写检查而不只依赖 AbortController。
+
+可重复命令（仓库根）：
+
+```sh
+uv run --project backend python -m pytest backend tests
+pnpm --dir frontend check
+node --test frontend/src/response.test.mjs
+pnpm --dir frontend exec playwright install --with-deps chromium
+node scripts/run_headless.mjs
+node scripts/run_privacy_headless.mjs --baseline
+node scripts/run_privacy_headless.mjs
+uv run --project backend python scripts/check_secrets.py
+```
+
+P2 的负对照实际命令将 `git show 0191fac:backend/storage.py` 经 exec 加载到独立 namespace，以旧 SQLiteStore 替换进程内 storage.SQLiteStore，然后 `pytest.main(['backend/test_storage.py', '-q'])`；三项测试按预期失败，其中首次提交后 remaining_ids=['api']。这只修改该验证进程的模块，不修改仓库源码。当前实现的三项同测试通过。
+
+P1 所有异步入口复核：connect 的两项并发响应合并后才提交当前会话；refresh/select/poll/create/cancel/delete/export 的每个 response/body await 与异步回写前检查同一代次；error/finally 的 busyRef/state 同样受保护。poll 清理会中断其请求且停止后续 refresh；logout/身份变化会中断整个旧会话，连模型访问码、问题输入、已选报告和错误一起清除。仅前端会话失效，不能据此断言后台研究任务已取消或供应商未计费。
+
+截至代码复核点 bb7913b，无用户人工依赖、无新增 credentials、无真实模型/费用调用，main 不变。云端本地 headless 因浏览器下载限制未跑通；上述浏览器证据来自 GitHub Ubuntu CI，原生 Codex Browser/生产部署/真实模型的未验证边界继续保持。现有草稿 PR #1 已更新，不另开 PR 或人工配置对话。
