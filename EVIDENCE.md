@@ -135,3 +135,19 @@ P1 所有异步入口复核：connect 的两项并发响应合并后才提交当
 - `python scripts/check_secrets.py`：工作区/暂存区/ZIP 检查通过（提交前再次扫描）。
 
 CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第二轮 PostgreSQL React→API→数据库重启/queued 明确执行验收。提交 SHA 和实际 CI 结果将在推送后补记；此时尚未运行新的 CI headless，不据此声称通过。原生 Browser、实际 Vercel Services 构建/路由、生产 TLS/备份和 DeepSeek 真实用量尚未验证，集中在 HUMAN_ACTIONS。
+
+### 已推送提交与实际 CI
+
+实现提交：[19e5a91e8a98f379f22bc0416e7d6a9cb1911ac2](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/19e5a91e8a98f379f22bc0416e7d6a9cb1911ac2)，`feat: 增加PostgreSQL租约与Vercel请求内研究执行`。GitHub API 创建 tree 后与本地 git tree SHA 35aa45501f2f3525187ef039915026f629ef2692 完全一致；更新 develop 为非强推，fetch/rebase 同步后工作区干净。main 仍为 533291b025a53a703384976b2f3605641399a52d。
+
+[PR CI 37134189156](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37134189156) completed/success；quality job 111235218963 的实际日志：
+
+- PostgreSQL17 service 初始化成功，后端 `72 passed, 2 skipped, 1 warning in 5.03s`。两项 skip 是 SQLite 参数组的 PostgreSQL 专用线程/事务测试，不是 PostgreSQL 缺失。保留 FastAPI/httpx 测试客户端弃用警告。
+- 冻结 uv/pnpm 安装、Ruff 检查及格式、前端格式/类型/构建、13 响应契约全部 success；敏感检查 `45 index blobs, 45 worktree files and embedded ZIP members checked`。
+- 3 fixed contracts passed，0 model calls。
+- `SQLite storage verified`；headless 实际 `6 desktop/mobile research flows, 12 downloads, keyboard submit, denied identity, reload and API restart recovery, queued cold-start explicit execution, logout privacy; 0 page errors; 0 model calls`。
+- `PostgreSQL storage verified`；第二轮 headless 同样六种桌面/窄屏流程、十二导出、真实 API 重启、queued 在新进程中明确执行，0页面错误/0模型调用。
+- `Baseline 0191fac privacy regression reproduced: 1 failed assertions; Alice poll list appears in Bob session`；负对照保持有效。
+- `Privacy headless PASS: 30 delayed completion scenarios`；退出/切换身份后的旧列表、详情、资料、错误、busy、创建/取消/删除/下载均被压制，abort信号确实发出而mock故意忽略取消，0模型调用。
+
+同一 [draft PR #1](https://github.com/frontend-is-magic/deep-ai-research-assistant/pull/1) 已更新范围与边界。上面的浏览器证据来自 GitHub Ubuntu 的真实 Chromium headless，不是云端本机原生 Browser，也不是实际 Vercel 平台验收。生产 DATABASE_URL/TLS/备份、托管身份、Services beta 项目可用性与实际平台构建/路由、DeepSeek 真实费用/语义仍未验证，HUMAN_ACTIONS 已给出具体交接。所有自动实现与 CI 均已完成，缺少生产凭据没有成为代码开发阻塞。
