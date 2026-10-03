@@ -32,7 +32,7 @@ def test_restart_repairs_seed_batch_after_committed_write(tmp_path, monkeypatch,
     repaired = SQLiteStore(path, DOCUMENTS)
     assert {doc["id"] for doc in repaired.documents()} == {doc["id"] for doc in DOCUMENTS}
     assert repaired.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 5
-    assert repaired.db.execute("SELECT version FROM schema_migrations").fetchall() == [(1,)]
+    assert repaired.db.execute("SELECT version FROM schema_migrations").fetchall() == [(1,), (2,)]
     original_doc = next(doc for doc in repaired.documents() if doc["id"] == "api")
     updated = repaired.put_document({**original_doc, "body": "maintainer revision must survive"})
     repaired.db.close()

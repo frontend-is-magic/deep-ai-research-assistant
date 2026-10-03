@@ -1,7 +1,6 @@
 """Private single-worker workbench. No network ingestion or arbitrary execution."""
 
 import asyncio
-from contextlib import asynccontextmanager
 import hmac
 import json
 import os
@@ -9,11 +8,14 @@ import re
 from uuid import uuid4
 from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException, Response
+from fastapi import Header, HTTPException, Response, Request
 from pydantic import Field
 
 from engine import DOCUMENTS, Research, StrictModel, demo, generate
 from storage import SQLiteStore, now
+from postgres import PostgreSQLStore
+
+EXECUTION_SECONDS = 25
 
 ALLOWED_HOSTS = {
     "fastapi.tiangolo.com",
@@ -33,9 +35,8 @@ class DocumentInput(StrictModel):
     acquisition: str = Field(pattern=r"^manual-transcription$")
 
 
-def install_workspace(api, question_model, charge, client_factory, storage_factory=None):
+def install_workspace(api, question_model, client_factory, storage_factory=None):
     store = None
-    tasks = {}
 
     @api.middleware("http")
     async def private_cache(request, call_next):
@@ -44,26 +45,20 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    @asynccontextmanager
-    async def lifespan(_api):
-        yield
-        pending = list(tasks.values())
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-
-    api.router.lifespan_context = lifespan
-
     def storage():
         nonlocal store
         if store is None:
-            if os.getenv("VERCEL") and not storage_factory:
+            if os.getenv("VERCEL") and not storage_factory and not os.getenv("DATABASE_URL"):
                 raise HTTPException(503, "durable_storage_required")
             store = (
                 storage_factory
                 or (
-                    lambda: SQLiteStore(
-                        os.getenv("RESEARCH_DB_PATH") or "data/research.sqlite3", DOCUMENTS
+                    lambda: (
+                        PostgreSQLStore(os.environ["DATABASE_URL"], DOCUMENTS)
+                        if os.getenv("DATABASE_URL")
+                        else SQLiteStore(
+                            os.getenv("RESEARCH_DB_PATH") or "data/research.sqlite3", DOCUMENTS
+                        )
                     )
                 )
             )()
@@ -98,7 +93,7 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             raise HTTPException(404, "run_not_found")
         return run
 
-    def checkpoint(owner, run, research):
+    def checkpoint(owner, run, research, lease, finished=False):
         run.update(
             updated_at=now(),
             read_documents=[research.by_id[key] for key in sorted(research.read_ids)],
@@ -108,21 +103,20 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             usage=research.usage or None,
             usage_complete=research.usage_complete and not research.pending_model_call,
         )
-        storage().save_run(owner, run)
+        if not storage().checkpoint_run(owner, run, lease, finished):
+            raise HTTPException(409, "execution_lease_lost")
 
-    async def execute(owner, run, research):
-        run.update(status="running", updated_at=now())
-        checkpoint(owner, run, research)
+    async def execute(owner, run, research, lease):
         try:
             result = (
                 demo(run["prompt"], research=research)
                 if run["mode"] == "demo"
-                else await generate(run["prompt"], charge, client_factory, research)
+                else await generate(run["prompt"], storage().charge_model, client_factory, research)
             )
             result["run_id"] = run["run_id"]
             run.update(status="completed", result=result)
         except asyncio.CancelledError:
-            run.update(status="cancelled", failure_reason="user_cancelled")
+            run.update(status="cancelled", failure_reason=run.pop("stop_reason", "user_cancelled"))
         except HTTPException as exc:
             run.update(status="failed", failure_reason=exc.detail)
         except Exception:
@@ -130,8 +124,7 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
         finally:
             if run["status"] != "completed" and research.model_calls:
                 research.usage_complete = False
-            checkpoint(owner, run, research)
-            tasks.pop(run["run_id"], None)
+            checkpoint(owner, run, research, lease, finished=True)
 
     from fastapi import Depends
 
@@ -197,9 +190,6 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
                 raise HTTPException(401, "access_required")
             if not os.getenv("DEEPSEEK_API_KEY"):
                 raise HTTPException(503, "provider_not_configured")
-        if sum(not task.done() for task in tasks.values()) >= 4:
-            raise HTTPException(429, "run_capacity")
-        research = Research(storage().documents())
         run = {
             "run_id": str(uuid4()),
             "prompt": body.prompt,
@@ -215,11 +205,67 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             "tool_calls": 0,
             "usage": None,
             "usage_complete": True,
+            "document_snapshot": storage().documents(),
         }
         storage().save_run(owner, run)
-        research.on_progress = lambda: checkpoint(owner, run, research)
-        tasks[run["run_id"]] = asyncio.create_task(execute(owner, run, research))
         return run
+
+    @api.post("/api/runs/{run_id}/execute")
+    async def execute_request(
+        run_id: str,
+        request: Request,
+        owner=Depends(identity),
+        x_playground_token: str | None = Header(None),
+    ):
+        saved = owned(owner, run_id)
+        if saved["mode"] == "deepseek":
+            expected = os.getenv("PLAYGROUND_ACCESS_TOKEN", "")
+            if (
+                not expected
+                or not x_playground_token
+                or not hmac.compare_digest(expected.encode(), x_playground_token.encode())
+            ):
+                raise HTTPException(401, "access_required")
+            if not os.getenv("DEEPSEEK_API_KEY"):
+                raise HTTPException(503, "provider_not_configured")
+        run, lease = storage().claim_run(owner, run_id)
+        if run is None:
+            raise HTTPException(404, "run_not_found")
+        if not lease:
+            if run["status"] == "running":
+                raise HTTPException(409, "run_in_progress")
+            return run
+        research = Research(run["document_snapshot"])
+        research.on_progress = lambda: checkpoint(owner, run, research, lease)
+        # This task is always joined BEFORE the HTTP handler returns.
+        task = asyncio.create_task(execute(owner, run, research, lease))
+        reason = None
+        try:
+            async with asyncio.timeout(EXECUTION_SECONDS):
+                while not task.done():
+                    if await request.is_disconnected():
+                        reason = "client_disconnected"
+                        break
+                    if owned(owner, run_id)["status"] != "running":
+                        reason = "user_cancelled"
+                        break
+                    await asyncio.sleep(0.1)
+        except TimeoutError:
+            reason = "execution_timeout"
+        except asyncio.CancelledError:
+            reason = "request_cancelled"
+            raise
+        finally:
+            if not task.done():
+                run["stop_reason"] = reason or "request_cancelled"
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if task.cancelled():
+                run.update(
+                    status="cancelled", failure_reason=run.pop("stop_reason", "request_cancelled")
+                )
+                checkpoint(owner, run, research, lease, finished=True)
+        return owned(owner, run_id)
 
     @api.get("/api/runs")
     async def listing(owner=Depends(identity)):
@@ -247,25 +293,18 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
 
     @api.post("/api/runs/{run_id}/cancel")
     async def cancel(run_id: str, owner=Depends(identity)):
-        run = owned(owner, run_id)
-        task = tasks.get(run_id)
-        if task:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            # A task cancelled before entering execute still needs a terminal record.
-            run = owned(owner, run_id)
-            if run["status"] in {"queued", "running"}:
-                run.update(status="cancelled", failure_reason="user_cancelled", updated_at=now())
-                storage().save_run(owner, run)
-                tasks.pop(run_id, None)
-        return owned(owner, run_id)
+        run = storage().cancel_run(owner, run_id)
+        if run is None:
+            raise HTTPException(404, "run_not_found")
+        return run
 
     @api.delete("/api/runs/{run_id}", status_code=204)
     async def delete(run_id: str, owner=Depends(identity)):
         run = owned(owner, run_id)
         if run["status"] in {"queued", "running"}:
             raise HTTPException(409, "cancel_before_delete")
-        storage().delete_run(owner, run_id)
+        if not storage().delete_run(owner, run_id):
+            raise HTTPException(409, "execution_still_finishing")
         return Response(status_code=204)
 
     @api.get("/api/runs/{run_id}/export")
@@ -302,3 +341,5 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
                 "Cache-Control": "no-store",
             },
         )
+
+    return lambda: storage().charge_model()

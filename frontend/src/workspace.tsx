@@ -5,6 +5,7 @@ import { parseAnswer, responseError, safeHttpsUrl, type Answer } from './respons
 type Run = {
   run_id: string;
   prompt: string;
+  mode?: string;
   status: string;
   failure_reason: string | null;
   result?: unknown;
@@ -87,14 +88,14 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
     };
   }, []);
 
-  async function api(snapshot: Session, path: string, init: RequestInit = {}) {
+  async function api(snapshot: Session, path: string, init: RequestInit = {}, timeout = 10000) {
     ensureCurrent(snapshot);
     const response = await fetch(path, {
       cache: 'no-store',
       ...init,
       signal: AbortSignal.any([
         snapshot.controller.signal,
-        AbortSignal.timeout(10000),
+        AbortSignal.timeout(timeout),
         ...(init.signal ? [init.signal] : []),
       ]),
       headers: {
@@ -111,8 +112,13 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
     }
     return response;
   }
-  async function json<T>(snapshot: Session, path: string, init: RequestInit = {}): Promise<T> {
-    const payload = await (await api(snapshot, path, init)).json();
+  async function json<T>(
+    snapshot: Session,
+    path: string,
+    init: RequestInit = {},
+    timeout = 10000,
+  ): Promise<T> {
+    const payload = await (await api(snapshot, path, init, timeout)).json();
     ensureCurrent(snapshot);
     return payload;
   }
@@ -137,6 +143,23 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
         busyRef.current = false;
         setBusy(false);
       });
+    }
+  }
+  async function executeRun(snapshot: Session, id: string) {
+    try {
+      await json<Run>(
+        snapshot,
+        `/api/runs/${id}/execute`,
+        {
+          method: 'POST',
+          headers: { 'X-Playground-Token': providerToken },
+        },
+        35000,
+      );
+      await refresh(snapshot);
+      // Poll owns the selected detail; execution cannot overwrite a different selection.
+    } catch (e) {
+      publish(snapshot, () => setError(e instanceof Error ? e.message : '执行请求失败'));
     }
   }
   async function connect() {
@@ -303,6 +326,8 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
                     onReport(null);
                   });
                   await refresh(snapshot);
+                  ensureCurrent(snapshot);
+                  void executeRun(snapshot, run.run_id);
                 })
               }
             >
@@ -332,6 +357,14 @@ export function Workspace({ onReport }: { onReport: (answer: Answer | null) => v
               <p role="status">
                 状态：{active.status} · run_id：{active.run_id}
               </p>
+              {active.status === 'queued' && (
+                <Button
+                  disabled={busy || (active.mode === 'deepseek' && !providerToken)}
+                  onClick={() => void executeRun(session.current, active.run_id)}
+                >
+                  执行待处理任务
+                </Button>
+              )}
               {active.failure_reason && <p role="alert">失败原因：{active.failure_reason}</p>}
               <ul>
                 {active.read_documents?.map((doc) => (

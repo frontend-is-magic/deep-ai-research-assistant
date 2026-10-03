@@ -89,7 +89,7 @@ def create_app(client_factory=httpx.AsyncClient, storage_factory=None):
 
     from workspace import install_workspace
 
-    install_workspace(api, Question, charge, client_factory, storage_factory)
+    durable_charge = install_workspace(api, Question, client_factory, storage_factory)
 
     @api.post("/api/ask")
     async def ask(body: Question, request: Request, x_playground_token: str | None = Header(None)):
@@ -108,7 +108,13 @@ def create_app(client_factory=httpx.AsyncClient, storage_factory=None):
         if body.mode == "demo":
             return demo(body.prompt)
 
-        task = asyncio.create_task(generate(body.prompt, charge, client_factory))
+        task = asyncio.create_task(
+            generate(
+                body.prompt,
+                durable_charge if os.getenv("VERCEL") or os.getenv("DATABASE_URL") else charge,
+                client_factory,
+            )
+        )
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=0.1)

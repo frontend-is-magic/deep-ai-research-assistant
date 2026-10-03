@@ -7,10 +7,14 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+from contextlib import contextmanager
 
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+from durable import DurableRuns  # noqa: E402
 
 
 class Store(Protocol):
@@ -20,9 +24,15 @@ class Store(Protocol):
     def runs(self, owner: str) -> list[dict]: ...
     def get_run(self, owner: str, run_id: str) -> dict | None: ...
     def delete_run(self, owner: str, run_id: str) -> bool: ...
+    def claim_run(self, owner: str, run_id: str) -> tuple: ...
+    def checkpoint_run(self, owner: str, run: dict, token: str, finished=False) -> bool: ...
+    def cancel_run(self, owner: str, run_id: str) -> dict | None: ...
+    def charge_model(self) -> None: ...
 
 
-class SQLiteStore:
+class SQLiteStore(DurableRuns):
+    postgres = False
+
     def __init__(self, path, seeds):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
@@ -43,17 +53,28 @@ class SQLiteStore:
             if doc["id"] not in existing_ids:
                 self.put_document(doc)
                 existing_ids.add(doc["id"])
-        # A single worker owns this store. Restart never silently resumes paid calls.
-        for identity, owner, payload in self.db.execute(
-            "SELECT id, owner, payload FROM runs"
-        ).fetchall():
-            run = json.loads(payload)
-            if run["status"] in {"queued", "running"}:
-                run.update(
-                    status="interrupted", failure_reason="process_restarted", updated_at=now()
-                )
-                self.save_run(owner, run)
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(runs)")}
+        if "lease_token" not in columns:
+            self.db.execute("ALTER TABLE runs ADD COLUMN lease_token TEXT")
+            self.db.execute("ALTER TABLE runs ADD COLUMN lease_until REAL")
+        if "created_at" not in columns:
+            self.db.execute("ALTER TABLE runs ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+            self.db.execute(
+                "UPDATE runs SET created_at=COALESCE(json_extract(payload, '$.created_at'), '')"
+            )
+        self.db.execute("CREATE TABLE IF NOT EXISTS model_requests(requested_at REAL NOT NULL)")
+        self.db.execute("INSERT OR IGNORE INTO schema_migrations VALUES(2)")
         self.db.commit()
+
+    @contextmanager
+    def transaction(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            yield self.db
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
 
     def documents(self):
         return [
@@ -80,28 +101,3 @@ class SQLiteStore:
         )
         self.db.commit()
         return doc
-
-    def save_run(self, owner, run):
-        self.db.execute(
-            "INSERT OR REPLACE INTO runs VALUES(?,?,?)", (run["run_id"], owner, json.dumps(run))
-        )
-        self.db.commit()
-
-    def runs(self, owner):
-        return [
-            json.loads(row[0])
-            for row in self.db.execute(
-                "SELECT payload FROM runs WHERE owner=? ORDER BY rowid DESC LIMIT 100", (owner,)
-            )
-        ]
-
-    def get_run(self, owner, run_id):
-        row = self.db.execute(
-            "SELECT payload FROM runs WHERE id=? AND owner=?", (run_id, owner)
-        ).fetchone()
-        return json.loads(row[0]) if row else None
-
-    def delete_run(self, owner, run_id):
-        cursor = self.db.execute("DELETE FROM runs WHERE id=? AND owner=?", (run_id, owner))
-        self.db.commit()
-        return bool(cursor.rowcount)

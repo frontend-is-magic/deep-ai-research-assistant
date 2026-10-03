@@ -29,6 +29,10 @@ OTHER = {"Authorization": "Bearer bob-test"}
 
 
 async def completed(client, run_id):
+    response = await client.post(
+        f"/api/runs/{run_id}/execute", headers={**HEADERS, "X-Playground-Token": "provider-test"}
+    )
+    assert response.status_code == 200
     for _ in range(100):
         run = (await client.get(f"/api/runs/{run_id}", headers=HEADERS)).json()
         if run["status"] not in {"queued", "running"}:
@@ -135,7 +139,7 @@ def test_restart_interruption_and_migration(setup):
     run = recovered.get_run("alice", "interrupted")
     assert run["status"] == "interrupted"
     assert run["failure_reason"] == "process_restarted"
-    assert recovered.db.execute("SELECT version FROM schema_migrations").fetchall() == [(1,)]
+    assert recovered.db.execute("SELECT version FROM schema_migrations").fetchall() == [(1,), (2,)]
     assert recovered.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 5
 
 
@@ -168,7 +172,16 @@ async def test_cancel_running_and_provider_failure(setup, monkeypatch):
                 json={"prompt": "API", "mode": "deepseek"},
             )
         ).json()["run_id"]
+        executing = asyncio.create_task(
+            client.post(
+                f"/api/runs/{run_id}/execute",
+                headers={**HEADERS, "X-Playground-Token": "provider-test"},
+            )
+        )
+        await asyncio.sleep(0.05)
         run = (await client.post(f"/api/runs/{run_id}/cancel", headers=HEADERS)).json()
+        await executing
+        run = (await client.get(f"/api/runs/{run_id}", headers=HEADERS)).json()
         assert run["status"] == "cancelled"
         assert run["failure_reason"] == "user_cancelled"
         assert run["usage_complete"] is False
@@ -262,6 +275,12 @@ async def test_inflight_read_and_usage_checkpoint_survives_restart(setup, monkey
                 json={"prompt": "API", "mode": "deepseek"},
             )
         ).json()["run_id"]
+        executing = asyncio.create_task(
+            client.post(
+                f"/api/runs/{identity}/execute",
+                headers={**HEADERS, "X-Playground-Token": "provider-test"},
+            )
+        )
         await asyncio.wait_for(waiting.wait(), timeout=2)
         run = (await client.get(f"/api/runs/{identity}", headers=HEADERS)).json()
         assert run["status"] == "running"
@@ -271,9 +290,13 @@ async def test_inflight_read_and_usage_checkpoint_survives_restart(setup, monkey
         assert run["usage"] == {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22}
         assert run["usage_complete"] is False
         # Open storage as after a crash; pending model call is never replayed.
-        recovered = factory().get_run("alice", identity)
+        recovered_store = factory()
+        assert recovered_store.get_run("alice", identity)["status"] == "running"
+        recovered_store.db.execute("UPDATE runs SET lease_until=0 WHERE id=?", (identity,))
+        recovered_store.db.commit()
+        recovered = recovered_store.get_run("alice", identity)
         assert recovered["status"] == "interrupted"
         assert recovered["read_documents"] == run["read_documents"]
         assert recovered["usage"] == run["usage"]
         assert recovered["usage_complete"] is False
-        await client.post(f"/api/runs/{identity}/cancel", headers=HEADERS)
+        await executing

@@ -117,3 +117,21 @@ P2 的负对照实际命令将 `git show 0191fac:backend/storage.py` 经 exec �
 P1 所有异步入口复核：connect 的两项并发响应合并后才提交当前会话；refresh/select/poll/create/cancel/delete/export 的每个 response/body await 与异步回写前检查同一代次；error/finally 的 busyRef/state 同样受保护。poll 清理会中断其请求且停止后续 refresh；logout/身份变化会中断整个旧会话，连模型访问码、问题输入、已选报告和错误一起清除。仅前端会话失效，不能据此断言后台研究任务已取消或供应商未计费。
 
 截至代码复核点 bb7913b，无用户人工依赖、无新增 credentials、无真实模型/费用调用，main 不变。云端本地 headless 因浏览器下载限制未跑通；上述浏览器证据来自 GitHub Ubuntu CI，原生 Codex Browser/生产部署/真实模型的未验证边界继续保持。现有草稿 PR #1 已更新，不另开 PR 或人工配置对话。
+
+## Vercel 持久化增量 · 2026-10-03 · 本地证据
+
+主线对 bb7913 的独立复验（用户回传，区别于本分支 CI）：同脚本先复现 0191fac 泄漏，再验证延迟 fetch/JSON × 忽略取消/禁用 abort 四种组合；旧响应实际交付仍不进入 Bob 列表/详情/错误，Bob 后续刷新正常。SQLite 1/5 恢复 5/5，维护者 v2 的正文/标题/时间/hash/自定义字段及 v1 历史逐字保留，重复初始化三次稳定。主线确认 3 个新增 storage 测试及 PR CI 37132384660 / push CI 37132382202 成功；本段为独立复验转述，不冒称云端新跑。
+
+本轮新增 PostgreSQLStore / psycopg[binary]==3.3.3（uv.lock 冻结），SQLite v2 租约迁移、数据库共享容量/调用限流、create 与请求内 execute 分离、资料创建快照、跨实例取消与租约过期恢复。根 Vercel Services 配置路由实际 FastAPI，删除 503 占位；设计与官方资料见 ADR-002。缺少生产 DATABASE_URL 仍失败关闭，不能声称已部署。
+
+实际本地命令与结果：
+
+- `uv add --project backend 'psycopg[binary]==3.3.3'`、`uv sync --locked --project backend`：成功，28 个锁定包。
+- `uv run --project backend ruff check backend scripts tests`、`ruff format --check backend scripts tests`：通过。
+- 无 PostgreSQL URL 的 `python -m pytest backend tests -q`：63 passed / 11 skipped；其中 9 个 PostgreSQL 契约因未配置测试库跳过，2 个 SQLite 分组的 PG 专用测试跳过。
+- 在本容器安装临时 PostgreSQL 16.15、启动本地 cluster、创建隔离 research_test 库；`TEST_DATABASE_URL=postgresql:///research_test uv run --project backend python -m pytest backend tests -q`：72 passed / 2 intentionally skipped，3.47s。没有生产数据库或外部服务账号；测试随机 schema 创建并清理。真实并发八连接同 run 仅一枚租约；四连接写版本得到 2/3/4/5；跨实例重复执行不重复 mock 调用；取消/超时/断开返回前 worker 已退出；审计跨新实例保持；过期 worker 无法写回；种子事务中断回滚且维护者历史保留。
+- `npx --yes pnpm@10.32.1 --dir frontend check`：格式、TypeScript、Vite 生产构建通过。
+- `node --test frontend/src/response.test.mjs`：13/13；`python scripts/evaluate.py`：3/3固定契约，零模型。
+- `python scripts/check_secrets.py`：工作区/暂存区/ZIP 检查通过（提交前再次扫描）。
+
+CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第二轮 PostgreSQL React→API→数据库重启/queued 明确执行验收。提交 SHA 和实际 CI 结果将在推送后补记；此时尚未运行新的 CI headless，不据此声称通过。原生 Browser、实际 Vercel Services 构建/路由、生产 TLS/备份和 DeepSeek 真实用量尚未验证，集中在 HUMAN_ACTIONS。

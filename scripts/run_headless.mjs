@@ -12,7 +12,7 @@ const root = process.cwd();
 const temporary = await mkdtemp(resolve(tmpdir(), 'research-e2e-'));
 const token = randomUUID();
 const processes = new Set();
-const env = { ...process.env, WORKSPACE_IDENTITIES: JSON.stringify({ acceptance: token }), RESEARCH_DB_PATH: resolve(temporary, 'research.sqlite3'), DEEPSEEK_API_KEY: '', PLAYGROUND_ACCESS_TOKEN: '', MAINTAINER_TOKEN: '' };
+const env = { ...process.env, DATABASE_URL: process.env.RESEARCH_E2E_POSTGRES ? process.env.TEST_DATABASE_URL : '', WORKSPACE_IDENTITIES: JSON.stringify({ acceptance: token }), RESEARCH_DB_PATH: resolve(temporary, 'research.sqlite3'), DEEPSEEK_API_KEY: '', PLAYGROUND_ACCESS_TOKEN: '', MAINTAINER_TOKEN: '' };
 function launch(command, args, cwd = root) {
   const child = spawn(command, args, { cwd, env, stdio: 'ignore' });
   processes.add(child);
@@ -95,6 +95,11 @@ try {
     assert.ok((await workspace.innerText()).includes('取消计费冲突'));
     await context.close();
   }
+  // Queued creation must survive a killed/recreated API before any execution request.
+  const queuedResponse = await fetch('http://127.0.0.1:8010/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ prompt: 'API 冷启动待执行' }) });
+  assert.equal(queuedResponse.status, 202);
+  const queuedRun = await queuedResponse.json();
+  assert.equal(queuedRun.status, 'queued');
   await stop(api); api = startAPI(); await ready('http://127.0.0.1:8010/api/health');
   const page = await browser.newPage();
   await page.goto('http://127.0.0.1:5174');
@@ -103,6 +108,10 @@ try {
   const run = await (await page.request.get(`http://127.0.0.1:5174/api/runs/${persistedID}`, { headers: { Authorization: `Bearer ${token}` } })).json();
   assert.equal(run.status, 'completed');
   const workspace = page.getByRole('region', { name: '持久化研究工作台' });
+  await workspace.getByRole('button', { name: 'API 冷启动待执行 · queued', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: `状态：queued · run_id：${queuedRun.run_id}` }).waitFor();
+  await page.getByRole('button', { name: '执行待处理任务', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: `状态：completed · run_id：${queuedRun.run_id}` }).waitFor();
   const reportButton = workspace.getByRole('button', { name: '取消计费冲突 · completed', exact: true }).first();
   await reportButton.click();
   await page.getByRole('status').filter({ hasText: '状态：completed' }).waitFor();
@@ -110,7 +119,8 @@ try {
   assert.equal(await page.getByRole('region', { name: '回答', exact: true }).count(), 0);
   assert.equal(await page.getByLabel('工作台访问令牌').inputValue(), '');
   assert.deepEqual(errors, []);
-  console.log('Headless PASS: 6 desktop/mobile research flows, 12 downloads, keyboard submit, denied identity, reload and API restart recovery, logout privacy; 0 page errors; 0 model calls.');
+  console.log(`${process.env.RESEARCH_E2E_POSTGRES ? 'PostgreSQL' : 'SQLite'} storage verified`);
+  console.log('Headless PASS: 6 desktop/mobile research flows, 12 downloads, keyboard submit, denied identity, reload and API restart recovery, queued cold-start explicit execution, logout privacy; 0 page errors; 0 model calls.');
 } finally {
   await browser?.close();
   await Promise.all([...processes].map(stop));
