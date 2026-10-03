@@ -151,3 +151,11 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 - `Privacy headless PASS: 30 delayed completion scenarios`；退出/切换身份后的旧列表、详情、资料、错误、busy、创建/取消/删除/下载均被压制，abort信号确实发出而mock故意忽略取消，0模型调用。
 
 同一 [draft PR #1](https://github.com/frontend-is-magic/deep-ai-research-assistant/pull/1) 已更新范围与边界。上面的浏览器证据来自 GitHub Ubuntu 的真实 Chromium headless，不是云端本机原生 Browser，也不是实际 Vercel 平台验收。生产 DATABASE_URL/TLS/备份、托管身份、Services beta 项目可用性与实际平台构建/路由、DeepSeek 真实费用/语义仍未验证，HUMAN_ACTIONS 已给出具体交接。所有自动实现与 CI 均已完成，缺少生产凭据没有成为代码开发阻塞。
+
+### 追加：真实 HTTP 断开边界修复
+
+19e5a91 / c774274 的 CI 确实全部成功（c774274 CI 37134421800 也 completed/success），但原来的断开单元测试替换了 Request.is_disconnected，未覆盖真实网络与中间件。补做本地 Uvicorn 真实 socket 客户端取消后发现任务仍 running：HTTP 风格 Cache-Control 中间件消耗了断开事件，不能据原 CI 宣称及时观察真实断开。
+
+改为纯 ASGI PrivateCache，只包装 send 添加 no-store，不读取/改写 receive。新增 `test_real_http_disconnect_stops_worker_and_persists_audit` 在随机独占端口启动真实 Uvicorn，客户端真实关闭执行连接，验证 cancelled/client_disconnected、worker 已退出、已读版本/未知用量保存，并在新存储实例复验；没有 patch Request，也没有真实供应商 HTTP。
+
+实际负对照：临时仅恢复 c774274 的 HTTP 缓存中间件，运行 `TEST_DATABASE_URL=postgresql:///research_test ... pytest backend/test_durable.py -k real_http_disconnect -q`，SQLite/PostgreSQL 两组均因 running != cancelled 失败，2 expected failures；随后 finally 恢复工作区。修复后的完整后端/敏感测试为 `74 passed, 2 skipped, 1 warning in 4.04s`，真实 PostgreSQL16 与真实 socket；Ruff check/format通过。新提交对应 CI 将重新验证 PostgreSQL17 与全部 headless，推送后检查。

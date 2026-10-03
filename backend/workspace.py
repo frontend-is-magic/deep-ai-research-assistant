@@ -38,12 +38,32 @@ class DocumentInput(StrictModel):
 def install_workspace(api, question_model, client_factory, storage_factory=None):
     store = None
 
-    @api.middleware("http")
-    async def private_cache(request, call_next):
-        response = await call_next(request)
-        if request.url.path.startswith(("/api/runs", "/api/library")):
-            response.headers["Cache-Control"] = "no-store"
-        return response
+    # BaseHTTPMiddleware consumes disconnect events; keep ASGI receive untouched.
+    class PrivateCache:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            private = scope["type"] == "http" and scope["path"].startswith(
+                ("/api/runs", "/api/library")
+            )
+
+            async def send_private(message):
+                if private and message["type"] == "http.response.start":
+                    message = {
+                        **message,
+                        "headers": [
+                            (key, value)
+                            for key, value in message.get("headers", [])
+                            if key.lower() != b"cache-control"
+                        ]
+                        + [(b"cache-control", b"no-store")],
+                    }
+                await send(message)
+
+            await self.app(scope, receive, send_private)
+
+    api.add_middleware(PrivateCache)
 
     def storage():
         nonlocal store

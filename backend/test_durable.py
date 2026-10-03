@@ -301,3 +301,84 @@ def test_database_error_does_not_echo_connection_secrets(monkeypatch):
         PostgreSQLStore("unused", DOCUMENTS)
     assert error.value.status_code == 503
     assert error.value.detail == "database_unavailable"
+
+
+async def test_real_http_disconnect_stops_worker_and_persists_audit(durable, monkeypatch):
+    """Real socket disconnect, not a patched Request.is_disconnected."""
+    import asyncio
+    import socket
+    import threading
+    import uvicorn
+    import workspace
+
+    monkeypatch.setenv("WORKSPACE_IDENTITIES", '{"alice":"alice-test"}')
+    monkeypatch.setenv("PLAYGROUND_ACCESS_TOKEN", "provider-test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "mock-only")
+    started, stopped = threading.Event(), threading.Event()
+
+    async def mock_generate(prompt, charge, client_factory, research):
+        research.model_calls = 1
+        research.pending_model_call = True
+        research.tool("document_search", '{"query":"API"}')
+        research.tool("document_read", '{"document_ids":["api"]}')
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(workspace, "generate", mock_generate)
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(16)
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            create_app(storage_factory=durable),
+            log_level="critical",
+            access_log=False,
+            timeout_graceful_shutdown=2,
+        )
+    )
+    thread = threading.Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    headers = {"Authorization": "Bearer alice-test", "X-Playground-Token": "provider-test"}
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            created = (
+                await client.post(
+                    "/api/runs", headers=headers, json={"prompt": "API", "mode": "deepseek"}
+                )
+            ).json()
+            identity = created["run_id"]
+            executing = asyncio.create_task(
+                client.post(f"/api/runs/{identity}/execute", headers=headers)
+            )
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+            executing.cancel()
+            await asyncio.gather(executing, return_exceptions=True)
+            for _ in range(30):
+                saved = (await client.get(f"/api/runs/{identity}", headers=headers)).json()
+                if saved["status"] != "running":
+                    break
+                await asyncio.sleep(0.1)
+            assert saved["status"] == "cancelled"
+            assert saved["failure_reason"] == "client_disconnected"
+            assert stopped.is_set()
+            assert saved["usage_complete"] is False
+            assert saved["read_documents"][0]["id"] == "api"
+            assert durable().get_run("alice", identity) == saved
+    finally:
+        server.should_exit = True
+        await asyncio.to_thread(thread.join, 4)
+        sock.close()
+    assert not thread.is_alive()
