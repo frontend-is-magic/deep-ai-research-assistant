@@ -163,3 +163,15 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 修复提交：[5520d4027ea27939d58d6a9d7e7ead83a6840244](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/5520d4027ea27939d58d6a9d7e7ead83a6840244)，`fix: 保留真实客户端断开事件并持久化取消审计`；tree 与本地 7292a7cab199847647b0ace79031df99f2c02f1d 一致。[CI 37134705024](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37134705024) completed/success，quality job 111236759854。
 
 实际日志确认 `74 passed, 2 skipped, 1 warning in 5.83s`，新增真实 HTTP 断开回归在 SQLite/PostgreSQL17 两组都执行成功。冻结安装、Ruff、前端格式/类型/构建、13 响应契约、3 固定评测及 45 tracked/worktree/ZIP 敏感检查通过；两种存储 headless 各 6 流程/12 导出、API 重启与 queued 明确执行通过；0191fac 负对照依旧重现，30 隐私延迟回归通过，0 headless 页面错误与0真实模型调用。证据和 HUMAN_ACTIONS 已备妥，main 未修改；生产 Vercel 与原生 Browser 仍交主线验证。
+
+## 追加主线审查：取消确认后的模型轮次竞态
+
+主线独立复现 5520d40：第二 app 确认取消后，原 worker 的 checkpoint 保存 cancelled 却仍返回可继续，导致后两轮 MockTransport 请求在 cancelled 状态下发出，最终 model_calls=3 / usage=33；先前绿色 CI 没覆盖这条精确顺序。这里记录独立审查与云端新回归，不把既有 CI 重新解释为边界通过。
+
+修复：checkpoint_run 将“审计可保存”和“执行可继续”分开；取消/过期可保存本轮迟到的已知 usage/轨迹，但返回停止，ExecutionStopped 直接打断 generate。模型与工具另有 before_operation 数据库门禁，100ms 监测仅负责等待中的请求。取消前已准入/在途调用的收费不能撤回；已返回这一轮的用量保留完整，未返回仍标未知。过期租约的原令牌可做审计补齐，始终保留 interrupted，不能继续/复活；删除后或令牌不匹配不能写回。
+
+新增真实 SQLite/PostgreSQL 跨 app 竞态测试：第一轮 MockTransport 在返回前通过第二 app 确认 cancel（另测租约过期）；第一轮响应正常交付后，provider 请求数/model_calls 恒为 1，工具0，实际 usage=11、用量轨迹保留，终态取消/中断且新 app 查询一致，重复 execute 不再调用。没有真实供应商 HTTP。修正旧 slow mock，使其明确 pending_model_call=true，与“尚未返回用量的在途调用”契约一致；不再把所有取消的完整已知用量强行标未知。
+
+实际本地完整检查：`TEST_DATABASE_URL=postgresql:///research_test uv run --project backend python -m pytest backend tests -q`：78 passed / 2 intentionally skipped / 1 warning，4.57s；两种数据库真实 HTTP 断开与新取消/租约竞态定向 `-k 'real_http_disconnect or confirmed_before_provider_response'`：6 passed，1.67s。3固定评测、Ruff check/format通过。
+
+负对照临时仅恢复 5520d40 的 durable/engine/workspace，运行新 cancel 两组测试：SQLite/PostgreSQL 均2 expected failures，实际 model_calls=3、usage=33；finally 恢复当前文件。负对照不进入真实模型，不提交旧实现。新提交与 CI 结果推送后补记；此前0c8be46的文档CI37134887376成功，但不作为本次取消竞态已验证的证据。

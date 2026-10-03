@@ -40,8 +40,7 @@ class DurableRuns:
                 usage_complete=False,
                 updated_at=now(),
             )
-            self.write(db, owner, run, None, None)
-            token, until = None, None
+            self.write(db, owner, run, token, until)
         return run, token, until
 
     def write(self, db, owner, run, token=None, until=None):
@@ -97,13 +96,28 @@ class DurableRuns:
     def checkpoint_run(self, owner, run, token, finished=False):
         with self.transaction() as db:
             value = self.load(db, owner, run["run_id"])
-            if not value or value[1] != token or value[2] <= self.clock(db):
+            if not value or value[1] != token:
                 return False
             saved, _, until = value
-            if saved["status"] == "cancelled":
-                run.update(status="cancelled", failure_reason=saved["failure_reason"], result=None)
+            stopped = saved["status"] in {"cancelled", "interrupted"} or until <= self.clock(db)
+            if stopped:
+                run.update(
+                    status=saved["status"], failure_reason=saved["failure_reason"], result=None
+                )
+            # Preserve a returned in-flight round's usage even after cancellation/expiry.
+            # This is audit-only: it never authorizes another operation or resurrects a run.
             self.write(db, owner, run, None if finished else token, None if finished else until)
-            return True
+            return (finished and saved["status"] == "cancelled") or not stopped
+
+    def execution_allowed(self, owner, run_id, token):
+        with self.transaction() as db:
+            value = self.load(db, owner, run_id)
+            return bool(
+                value
+                and value[1] == token
+                and value[0]["status"] == "running"
+                and value[2] > self.clock(db)
+            )
 
     def cancel_run(self, owner, run_id):
         with self.transaction() as db:

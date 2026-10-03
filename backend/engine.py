@@ -76,6 +76,10 @@ def decode(value):
     return json.loads(value, object_pairs_hook=unique_object)
 
 
+class ExecutionStopped(RuntimeError):
+    """Durable cancellation/lease fence; never a provider response error."""
+
+
 class Research:
     def __init__(self, documents=None):
         self.documents = documents if documents is not None else DOCUMENTS
@@ -88,6 +92,7 @@ class Research:
         self.usage_complete = True
         self.trace = []
         self.on_progress = None
+        self.before_operation = None
         self.pending_model_call = False
         self.step("计划", "限定为本地资料检索、批量读取、整理与引用校验。")
 
@@ -107,7 +112,12 @@ class Research:
         if self.on_progress:
             self.on_progress()
 
+    def admit_operation(self):
+        if self.before_operation:
+            self.before_operation()
+
     def tool(self, name, arguments):
+        self.admit_operation()
         if self.tool_calls >= 2:
             raise ValueError("tool_budget")
         self.tool_calls += 1
@@ -204,7 +214,7 @@ class Research:
         for key, count in known.items():
             self.usage[key] = self.usage.get(key, 0) + count
         self.pending_model_call = False
-        self.checkpoint()
+        self.step("模型用量", "保留本轮供应商返回的实际已知用量；缺失项不计为零。")
 
 
 def demo(prompt, documents=None, research=None):
@@ -240,6 +250,7 @@ async def generate(prompt, charge, client_factory=httpx.AsyncClient, research=No
     try:
         async with asyncio.timeout(20), client_factory(timeout=20) as client:
             for index in range(3):
+                run.admit_operation()
                 charge()
                 run.model_calls += 1
                 run.pending_model_call = True

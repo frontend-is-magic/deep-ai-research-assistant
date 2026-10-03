@@ -157,6 +157,7 @@ async def test_cancel_running_and_provider_failure(setup, monkeypatch):
 
     async def slow(*args):
         args[-1].model_calls = 1
+        args[-1].pending_model_call = True
         args[-1].tool("document_search", '{"query":"API"}')
         args[-1].tool("document_read", '{"document_ids":["api"]}')
         await asyncio.sleep(30)

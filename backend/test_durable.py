@@ -382,3 +382,97 @@ async def test_real_http_disconnect_stops_worker_and_persists_audit(durable, mon
         await asyncio.to_thread(thread.join, 4)
         sock.close()
     assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("stop", ["cancel", "lease_expiry"])
+async def test_cancel_confirmed_before_provider_response_stops_next_round_and_tool(
+    durable, monkeypatch, stop
+):
+    """Cancellation finishes in app B while app A's first provider round is in flight."""
+    monkeypatch.setenv("WORKSPACE_IDENTITIES", '{"alice":"alice-test"}')
+    monkeypatch.setenv("PLAYGROUND_ACCESS_TOKEN", "provider-test")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "mock-only")
+    headers = {"Authorization": "Bearer alice-test", "X-Playground-Token": "provider-test"}
+    identity = None
+    requests = []
+    second_app = create_app(storage_factory=durable)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=second_app), base_url="http://second"
+    ) as second:
+
+        async def provider(request):
+            requests.append(durable().get_run("alice", identity)["status"])
+            # Confirm database cancellation before delivering the first response.
+            if stop == "cancel":
+                cancelled = await second.post(f"/api/runs/{identity}/cancel", headers=headers)
+                assert cancelled.status_code == 200
+                terminal = "cancelled"
+            else:
+                expire(durable(), identity)
+                cancelled = await second.get(f"/api/runs/{identity}", headers=headers)
+                terminal = "interrupted"
+            assert cancelled.json()["status"] == terminal
+            assert durable().get_run("alice", identity)["status"] == terminal
+            index = len(requests)
+            name = "document_search" if index == 1 else "document_read"
+            arguments = '{"query":"API"}' if index == 1 else '{"document_ids":["api"]}'
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "id": f"call-{index}",
+                                        "type": "function",
+                                        "function": {"name": name, "arguments": arguments},
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+                },
+            )
+
+        def client_factory(**kwargs):
+            return httpx.AsyncClient(transport=httpx.MockTransport(provider), **kwargs)
+
+        first_app = create_app(client_factory=client_factory, storage_factory=durable)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=first_app), base_url="http://first"
+        ) as first:
+            identity = (
+                await first.post(
+                    "/api/runs", headers=headers, json={"prompt": "API", "mode": "deepseek"}
+                )
+            ).json()["run_id"]
+            result = await first.post(f"/api/runs/{identity}/execute", headers=headers)
+            assert result.status_code == 200
+            saved = result.json()
+            assert requests == ["running"], {
+                "provider_states": requests,
+                "model_calls": saved["model_calls"],
+                "usage": saved["usage"],
+            }
+            assert saved["status"] == ("cancelled" if stop == "cancel" else "interrupted")
+            assert saved["failure_reason"] == (
+                "user_cancelled" if stop == "cancel" else "lease_expired"
+            )
+            assert saved["model_calls"] == 1
+            assert saved["tool_calls"] == 0
+            assert saved["usage"] == {
+                "prompt_tokens": 10,
+                "completion_tokens": 1,
+                "total_tokens": 11,
+            }
+            assert saved["usage_complete"] is True
+            assert any(step["title"] == "模型用量" for step in saved["trace"])
+            assert saved["result"] is None
+            assert durable().get_run("alice", identity) == saved
+            assert (
+                await second.post(f"/api/runs/{identity}/execute", headers=headers)
+            ).json() == saved
+            assert requests == ["running"]

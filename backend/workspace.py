@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from fastapi import Header, HTTPException, Response, Request
 from pydantic import Field
 
-from engine import DOCUMENTS, Research, StrictModel, demo, generate
+from engine import DOCUMENTS, ExecutionStopped, Research, StrictModel, demo, generate
 from storage import SQLiteStore, now
 from postgres import PostgreSQLStore
 
@@ -124,7 +124,7 @@ def install_workspace(api, question_model, client_factory, storage_factory=None)
             usage_complete=research.usage_complete and not research.pending_model_call,
         )
         if not storage().checkpoint_run(owner, run, lease, finished):
-            raise HTTPException(409, "execution_lease_lost")
+            raise ExecutionStopped("durable_execution_stopped")
 
     async def execute(owner, run, research, lease):
         try:
@@ -135,6 +135,9 @@ def install_workspace(api, question_model, client_factory, storage_factory=None)
             )
             result["run_id"] = run["run_id"]
             run.update(status="completed", result=result)
+        except ExecutionStopped:
+            saved = owned(owner, run["run_id"])
+            run.update(status=saved["status"], failure_reason=saved["failure_reason"], result=None)
         except asyncio.CancelledError:
             run.update(status="cancelled", failure_reason=run.pop("stop_reason", "user_cancelled"))
         except HTTPException as exc:
@@ -142,8 +145,6 @@ def install_workspace(api, question_model, client_factory, storage_factory=None)
         except Exception:
             run.update(status="failed", failure_reason="internal_error")
         finally:
-            if run["status"] != "completed" and research.model_calls:
-                research.usage_complete = False
             checkpoint(owner, run, research, lease, finished=True)
 
     from fastapi import Depends
@@ -257,6 +258,12 @@ def install_workspace(api, question_model, client_factory, storage_factory=None)
             return run
         research = Research(run["document_snapshot"])
         research.on_progress = lambda: checkpoint(owner, run, research, lease)
+
+        def admit_operation():
+            if not storage().execution_allowed(owner, run_id, lease):
+                raise ExecutionStopped("durable_execution_stopped")
+
+        research.before_operation = admit_operation
         # This task is always joined BEFORE the HTTP handler returns.
         task = asyncio.create_task(execute(owner, run, research, lease))
         reason = None
