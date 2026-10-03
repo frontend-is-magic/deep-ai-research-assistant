@@ -133,7 +133,7 @@ def test_restart_interruption_and_migration(setup):
     assert recovered.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 5
 
 
-async def test_cancel_before_worker_and_provider_failure(setup, monkeypatch):
+async def test_cancel_running_and_provider_failure(setup, monkeypatch):
     api, _ = setup
     monkeypatch.setenv("PLAYGROUND_ACCESS_TOKEN", "provider-test")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-only")
@@ -145,16 +145,29 @@ async def test_cancel_before_worker_and_provider_failure(setup, monkeypatch):
         args[-1].usage_complete = False
         raise HTTPException(502, "provider_unavailable")
 
-    monkeypatch.setattr(workspace, "generate", fail)
+    async def slow(*args):
+        args[-1].model_calls = 1
+        args[-1].tool("document_search", '{"query":"API"}')
+        args[-1].tool("document_read", '{"document_ids":["api"]}')
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(workspace, "generate", slow)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api), base_url="http://test"
     ) as client:
-        run_id = (await client.post("/api/runs", headers=HEADERS, json={"prompt": "API"})).json()[
-            "run_id"
-        ]
+        run_id = (
+            await client.post(
+                "/api/runs",
+                headers={**HEADERS, "X-Playground-Token": "provider-test"},
+                json={"prompt": "API", "mode": "deepseek"},
+            )
+        ).json()["run_id"]
         run = (await client.post(f"/api/runs/{run_id}/cancel", headers=HEADERS)).json()
         assert run["status"] == "cancelled"
         assert run["failure_reason"] == "user_cancelled"
+        assert run["usage_complete"] is False
+        assert run["read_documents"][0]["id"] == "api"
+        monkeypatch.setattr(workspace, "generate", fail)
         run_id = (
             await client.post(
                 "/api/runs",

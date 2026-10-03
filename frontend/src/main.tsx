@@ -4,6 +4,7 @@ import { atom, useAtom } from 'jotai';
 import { Button } from './components/ui/button';
 import { parseAnswer, parseHealth, responseError, safeHttpsUrl, type Answer } from './response';
 import './style.css';
+import { Workspace } from './workspace';
 
 const outcomes = {
   complete: '整理完成',
@@ -95,12 +96,12 @@ function App() {
   return (
     <main className="mx-auto max-w-3xl space-y-6 px-5 py-10">
       <header>
-        <p className="text-sm text-lime-800">DEEP AI STATION / CAPSTONE</p>
+        <p className="text-sm text-lime-800">DEEP AI RESEARCH ASSISTANT</p>
         <h1 className="mt-2 text-3xl font-semibold">
           {capability === 'agent' ? 'Agent 研究助手' : 'AI 知识工作台'}
         </h1>
         <p className="mt-3 text-slate-600">
-          同一 React 前端，连接 Python / TypeScript / Go 的共同 API 契约，并展示后端支持的研究能力。
+          有证据、有边界的技术研究助手：资料版本、私人报告与有界运行。
         </p>
         {capability === 'agent' && (
           <p className="mt-3 text-sm text-slate-600">
@@ -114,6 +115,7 @@ function App() {
           </p>
         )}
       </header>
+      <Workspace onReport={setResult} />
       <section className="space-y-4 rounded-xl border border-lime-200 bg-white p-5">
         <label className="block">
           运行模式

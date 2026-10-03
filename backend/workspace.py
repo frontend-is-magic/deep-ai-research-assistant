@@ -1,6 +1,7 @@
 """Private single-worker workbench. No network ingestion or arbitrary execution."""
 
 import asyncio
+from contextlib import asynccontextmanager
 import hmac
 import json
 import os
@@ -36,6 +37,23 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
     store = None
     tasks = {}
 
+    @api.middleware("http")
+    async def private_cache(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith(("/api/runs", "/api/library")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @asynccontextmanager
+    async def lifespan(_api):
+        yield
+        pending = list(tasks.values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    api.router.lifespan_context = lifespan
+
     def storage():
         nonlocal store
         if store is None:
@@ -57,6 +75,8 @@ def install_workspace(api, question_model, charge, client_factory, storage_facto
             identities = json.loads(os.getenv("WORKSPACE_IDENTITIES", "{}"))
         except ValueError:
             raise HTTPException(503, "identity_not_configured") from None
+        if not isinstance(identities, dict):
+            raise HTTPException(503, "identity_not_configured")
         token = (
             authorization.removeprefix("Bearer ")
             if authorization and authorization.startswith("Bearer ")

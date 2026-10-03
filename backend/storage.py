@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ class SQLiteStore:
     def __init__(self, path, seeds):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
+        os.chmod(path, 0o600)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY);

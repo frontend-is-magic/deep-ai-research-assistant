@@ -29,3 +29,6 @@ jobs:
       - run: pnpm --dir frontend check
       - run: node --test src/response.test.mjs
         working-directory: frontend
+      - run: uv run --project backend python scripts/evaluate.py
+      - run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - run: node scripts/run_headless.mjs
