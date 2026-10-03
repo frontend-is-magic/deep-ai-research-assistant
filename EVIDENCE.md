@@ -199,3 +199,9 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 ### 首次 CI 安装路径修正
 
 精确 [756f8885947cd46f5d6f77d019f6754a5d9781dd](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/756f8885947cd46f5d6f77d019f6754a5d9781dd) 的 [CI37138314317](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37138314317) 在新增预检失败；其前置后端/格式/冻结安装/13契约/评测已通过，后续 headless 被跳过。日志显示 Vercel 重新创建临时 node_modules，随后从该目录执行的 pnpm worker 退出；失败路径仍成功释放4个监听。改为 PATH 指向原工作区固定 pnpm10.32.1（副本外），Vercel 安装仅改临时项目，避免安装器自身随临时 node_modules 被重建。保留此失败回执，下一提交重新验证。
+
+### 固定 CLI 预检绿色回执
+
+修正精确提交 [f7f674da526cfb4b3eb8ad2e5b51a120123ebbc8](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/f7f674da526cfb4b3eb8ad2e5b51a120123ebbc8)，[PR CI37138472386](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37138472386)，quality job111247763415 completed/success。实际日志：CLI62.2.0同域预检 PASS，6个自有监听释放；78passed/2intentional skipped/1warning（6.61s），冻结安装、前端格式/类型/构建、13响应契约、3固定评测、46文件/ZIP敏感扫描全部通过。SQLite/PostgreSQL headless各6流程/12导出，重启/queued冷启动、旧0191fac隐私负对照及30延迟场景均通过，0页面错误/0真实模型调用。
+
+本地修正后 `node scripts/preflight_vercel.mjs` 也再次 PASS/释放6端口。现有[草稿PR#1](https://github.com/frontend-is-magic/deep-ai-research-assistant/pull/1)更新，develop非强推；远端main核对仍533291b025a53a703384976b2f3605641399a52d。上述结论限本地CLI与CI，不代表已发布Vercel、Python平台断连已验证、原生Browser验收或真实模型/收费验证。人工事项仍集中HUMAN_ACTIONS与既有唯一人工对话。
