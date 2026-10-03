@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "frontend/",
+      "framework": "vite",
+      "installCommand": "npx --yes pnpm@10.32.1 install --frozen-lockfile",
+      "buildCommand": "npx --yes pnpm@10.32.1 build",
+      "outputDirectory": "dist"
+    },
+    "backend": {
+      "root": "backend/",
+      "framework": "fastapi",
+      "entrypoint": "app:app",
+      "installCommand": "uv sync --locked --no-dev",
+      "functions": { "app.py": { "maxDuration": 60 } }
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ]
+}

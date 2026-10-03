@@ -2,7 +2,7 @@ export interface Source {
   id: string;
   title: string;
   url: string | null;
-  kind?: 'course-excerpt' | 'conflict-fixture';
+  kind?: 'course-excerpt' | 'conflict-fixture' | 'public-manual';
 }
 
 interface BaseAnswer {
@@ -106,7 +106,8 @@ export function parseAnswer(value: unknown): Answer {
       (value.workflow === 'research-agent' && source.kind === undefined) ||
       (source.kind !== undefined &&
         source.kind !== 'course-excerpt' &&
-        source.kind !== 'conflict-fixture') ||
+        source.kind !== 'conflict-fixture' &&
+        source.kind !== 'public-manual') ||
       (source.kind === 'conflict-fixture' && source.url !== null)
     )
       throw invalid();

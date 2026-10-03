@@ -76,8 +76,14 @@ def decode(value):
     return json.loads(value, object_pairs_hook=unique_object)
 
 
+class ExecutionStopped(RuntimeError):
+    """Durable cancellation/lease fence; never a provider response error."""
+
+
 class Research:
-    def __init__(self):
+    def __init__(self, documents=None):
+        self.documents = documents if documents is not None else DOCUMENTS
+        self.by_id = {doc["id"]: doc for doc in self.documents}
         self.found_ids = set()
         self.read_ids = set()
         self.tool_calls = 0
@@ -85,6 +91,9 @@ class Research:
         self.usage = {}
         self.usage_complete = True
         self.trace = []
+        self.on_progress = None
+        self.before_operation = None
+        self.pending_model_call = False
         self.step("计划", "限定为本地资料检索、批量读取、整理与引用校验。")
 
     def step(self, title, detail, status="success"):
@@ -97,7 +106,18 @@ class Research:
             }
         )
 
+        self.checkpoint()
+
+    def checkpoint(self):
+        if self.on_progress:
+            self.on_progress()
+
+    def admit_operation(self):
+        if self.before_operation:
+            self.before_operation()
+
     def tool(self, name, arguments):
+        self.admit_operation()
         if self.tool_calls >= 2:
             raise ValueError("tool_budget")
         self.tool_calls += 1
@@ -110,7 +130,7 @@ class Research:
                 if not query:
                     raise ValueError("blank_query")
                 matches = [
-                    doc for doc in DOCUMENTS if any(word in query for word in doc["keywords"])
+                    doc for doc in self.documents if any(word in query for word in doc["keywords"])
                 ]
                 # Keep both sides of the known teaching conflict inside the three-document cap.
                 docs = sorted(matches, key=lambda doc: doc["kind"] != "conflict-fixture")[:3]
@@ -121,7 +141,7 @@ class Research:
                 ids = Read.model_validate(value).document_ids
                 if len(set(ids)) != len(ids) or not set(ids) <= self.found_ids:
                     raise ValueError("unknown_or_unsearched_document")
-                docs = [BY_ID[key] for key in ids]
+                docs = [self.by_id[key] for key in ids]
                 self.read_ids.update(ids)
                 self.step("读取", f"实际读取 {len(docs)} 篇本地正文。")
                 return {
@@ -145,16 +165,16 @@ class Research:
             if (
                 citation.document_id not in self.read_ids
                 or not citation.quote.strip()
-                or citation.quote not in BY_ID[citation.document_id]["body"]
+                or citation.quote not in self.by_id[citation.document_id]["body"]
             ):
                 raise ValueError("unread_or_invented_citation")
         groups = {
-            BY_ID[key]["conflict_group"]
+            self.by_id[key]["conflict_group"]
             for key in self.found_ids
-            if BY_ID[key].get("conflict_group")
+            if self.by_id[key].get("conflict_group")
         }
         if groups:
-            required = {doc["id"] for doc in DOCUMENTS if doc.get("conflict_group") in groups}
+            required = {doc["id"] for doc in self.documents if doc.get("conflict_group") in groups}
             if not required <= set(ids):
                 raise ValueError("incomplete_conflict_evidence")
         outcome = "conflicting_evidence" if groups else "complete"
@@ -172,7 +192,8 @@ class Research:
             "outcome": outcome,
             "answer": report.answer,
             "sources": [
-                {key: BY_ID[item][key] for key in ("id", "title", "url", "kind")} for item in ids
+                {key: self.by_id[item][key] for key in ("id", "title", "url", "kind")}
+                for item in ids
             ],
             "citations": [citation.model_dump() for citation in report.citations],
             "model_calls": self.model_calls,
@@ -192,12 +213,16 @@ class Research:
             self.usage_complete = False
         for key, count in known.items():
             self.usage[key] = self.usage.get(key, 0) + count
+        self.pending_model_call = False
+        self.step("模型用量", "保留本轮供应商返回的实际已知用量；缺失项不计为零。")
 
 
-def demo(prompt):
-    run = Research()
+def demo(prompt, documents=None, research=None):
+    run = research or Research(documents)
+    documents = run.documents
+    by_id = run.by_id
     query = prompt.strip().lower()
-    keywords = dict.fromkeys(word for doc in DOCUMENTS for word in doc["keywords"] if word in query)
+    keywords = dict.fromkeys(word for doc in documents for word in doc["keywords"] if word in query)
     observation = run.tool(
         "document_search", json.dumps({"query": " ".join(keywords) or query[:200]})
     )
@@ -206,27 +231,30 @@ def demo(prompt):
     if ids:
         run.tool("document_read", json.dumps({"document_ids": ids}))
     answer = "教学演示：按预设顺序检索和读取，没有模型决策。\n\n"
-    if any(BY_ID[key]["kind"] == "conflict-fixture" for key in ids):
+    if any(by_id[key]["kind"] == "conflict-fixture" for key in ids):
         answer += "以下合成练习资料相互冲突，需要核对实际计费规则，不能据此裁定事实。\n\n"
-    answer += "\n\n".join(BY_ID[key]["body"] for key in ids)
+    answer += "\n\n".join(by_id[key]["body"] for key in ids)
     return run.result(
         {
             "answer": answer,
-            "citations": [{"document_id": key, "quote": BY_ID[key]["body"]} for key in ids],
+            "citations": [{"document_id": key, "quote": by_id[key]["body"][:1000]} for key in ids],
         },
         "demo",
     )
 
 
-async def generate(prompt, charge, client_factory=httpx.AsyncClient):
-    run = Research()
+async def generate(prompt, charge, client_factory=httpx.AsyncClient, research=None):
+    run = research or Research()
     messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
     call_ids = set()
     try:
         async with asyncio.timeout(20), client_factory(timeout=20) as client:
             for index in range(3):
+                run.admit_operation()
                 charge()
                 run.model_calls += 1
+                run.pending_model_call = True
+                run.checkpoint()
                 body = {
                     "model": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                     "max_tokens": 800,

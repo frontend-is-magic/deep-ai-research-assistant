@@ -60,3 +60,8 @@ playwright-report/
 test-results/
 data/
 uploads/
+
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm

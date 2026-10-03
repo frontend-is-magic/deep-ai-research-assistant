@@ -6,8 +6,23 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: research_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/research_test
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.32.1
@@ -29,3 +44,13 @@ jobs:
       - run: pnpm --dir frontend check
       - run: node --test src/response.test.mjs
         working-directory: frontend
+      - run: uv run --project backend python scripts/evaluate.py
+      - run: node scripts/preflight_vercel.mjs
+        timeout-minutes: 5
+      - run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - run: node scripts/run_headless.mjs
+      - run: node scripts/run_headless.mjs
+        env:
+          RESEARCH_E2E_POSTGRES: "1"
+      - run: node scripts/run_privacy_headless.mjs --baseline
+      - run: node scripts/run_privacy_headless.mjs
