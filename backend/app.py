@@ -53,7 +53,7 @@ class BodyLimit:
         await self.app(scope, buffered, send)
 
 
-def create_app(client_factory=httpx.AsyncClient):
+def create_app(client_factory=httpx.AsyncClient, storage_factory=None):
     api = FastAPI(
         title="AI Research Agent Capstone", docs_url="/api/docs", openapi_url="/api/openapi.json"
     )
@@ -79,6 +79,18 @@ def create_app(client_factory=httpx.AsyncClient):
             "workflow": "research-agent",
         }
 
+    def charge():
+        now = time.monotonic()
+        while quota and now - quota[0] >= 60:
+            quota.popleft()
+        if len(quota) >= 10:
+            raise HTTPException(429, "rate_limited")
+        quota.append(now)
+
+    from workspace import install_workspace
+
+    install_workspace(api, Question, charge, client_factory, storage_factory)
+
     @api.post("/api/ask")
     async def ask(body: Question, request: Request, x_playground_token: str | None = Header(None)):
         if not body.prompt.strip():
@@ -95,14 +107,6 @@ def create_app(client_factory=httpx.AsyncClient):
                 raise HTTPException(503, "provider_not_configured")
         if body.mode == "demo":
             return demo(body.prompt)
-
-        def charge():
-            now = time.monotonic()
-            while quota and now - quota[0] >= 60:
-                quota.popleft()
-            if len(quota) >= 10:
-                raise HTTPException(429, "rate_limited")
-            quota.append(now)
 
         task = asyncio.create_task(generate(body.prompt, charge, client_factory))
         try:
