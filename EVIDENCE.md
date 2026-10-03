@@ -175,3 +175,13 @@ CI 已配置临时 postgres:17 服务、同契约真实 PostgreSQL 测试及第�
 实际本地完整检查：`TEST_DATABASE_URL=postgresql:///research_test uv run --project backend python -m pytest backend tests -q`：78 passed / 2 intentionally skipped / 1 warning，4.57s；两种数据库真实 HTTP 断开与新取消/租约竞态定向 `-k 'real_http_disconnect or confirmed_before_provider_response'`：6 passed，1.67s。3固定评测、Ruff check/format通过。
 
 负对照临时仅恢复 5520d40 的 durable/engine/workspace，运行新 cancel 两组测试：SQLite/PostgreSQL 均2 expected failures，实际 model_calls=3、usage=33；finally 恢复当前文件。负对照不进入真实模型，不提交旧实现。新提交与 CI 结果推送后补记；此前0c8be46的文档CI37134887376成功，但不作为本次取消竞态已验证的证据。
+
+### 取消屏障精确提交与绿色 CI 回执
+
+修复：[3e1da918caa9ebf503b5946e0e421aaf0957e14d](https://github.com/frontend-is-magic/deep-ai-research-assistant/commit/3e1da918caa9ebf503b5946e0e421aaf0957e14d)，`fix: 以数据库取消屏障阻断后续模型和工具调用`；GitHub tree 与本地 91d6f9461518c33775d9d58454ece590083fd715 一致，非强推 develop。
+
+[CI 37135583272](https://github.com/frontend-is-magic/deep-ai-research-assistant/actions/runs/37135583272) completed/success，quality job 111239333652。实际日志 `78 passed, 2 skipped, 1 warning in 6.81s`：取消 ACK 后第一轮交付、租约过期同语义、真实 socket 断开分别在 SQLite 与 PostgreSQL17 执行；两项 skip 仍是 SQLite 参数组的 PG 专用测试。冻结安装、Ruff、前端格式/类型/构建、13 响应契约、3固定评测、45 tracked/worktree/ZIP敏感检查全通过。SQLite/PostgreSQL headless各6流程/12导出、API重启和queued明确执行通过；0191fac负对照重现，30隐私延迟场景通过，0页面错误、0真实模型调用。
+
+主线精确 3e1da91 独立复验（用户回传，新的 clean public checkout / 冻结依赖，与上述云端 CI 区分）：原取消脚本 cancel ACK 后无新请求，model_calls=1 / tool_calls=0 / usage=11 / usage_complete=true，新读持久化一致；原始 ASGI http.disconnect 与 handler task cancel 保留前一轮usage11、pending第二轮、usage_complete=false和3步trace；五种跨owner操作均404/no-store。主线本地 test_durable 11passed/14skipped，因无本地PG，实际PG依据本次CI；0真实模型调用，未发现新问题。本轮取消审计至此收束。
+
+部署边界更新：主线报告 Vercel 连接器访问既有 bloodymoons-projects 返回403（scope授权不足），已归入既有一次性人工配置聊天，不绕过认证。此权限问题与代码/CI实现区分，HUMAN_ACTIONS更新；实际Vercel平台部署仍未验证，独立只读配置审查由主线进行。
